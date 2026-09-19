@@ -26,7 +26,7 @@ This skill executes an on-demand or scheduled lead discovery and navigation plan
 flowchart LR
     A["Trigger (On-Demand / User Schedule)"] --> B["Google Places Search (Global EN)"]
     B --> C["Filter: Exclusion Sources (Tier 1 Hard + Tier 2 Jev Model)"]
-    C --> D["Audit: Jev Decision Model & Multimodal Photos"]
+    C --> D["Audit: Zero-API Agent Reasoning / Jev Model & Vision"]
     D --> E["Anti-Shuttle Corridor Slice Router"]
     E --> F["Full Navigation Route URL"]
     E --> G["7-Column English Spreadsheet & Report"]

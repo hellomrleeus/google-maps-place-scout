@@ -52,51 +52,61 @@
 sequenceDiagram
     autonumber
     actor Human as 业务人员 (Human)
-    participant Agent as AI 智能体 (Agent / 调度总指挥)
+    participant Agent as 宿主 AI 智能体 (Agent / 调度总指挥)
     participant Engine as Python 执行引擎 (main.py)
     participant Maps as Google Maps Places API
-    participant CRM as 外部已签约 CRM & 已拜访历史库
-    participant Jev as Jev 决策模型 (~typesafe/jev-latest)
+    participant Sources as 黑名单与排除源 (exclusion_sources)
+    participant Jev as Jev 决策模型 (可选 / typesafe-ai)
     participant Sheet as Google Sheet Webhook / Excel
 
     %% 阶段 1: 意图唤起与调度
     Note over Human, Agent: 阶段 1: 意图解析与环境调度
-    Human->>Agent: 自然语言指令 (例如: "从 Fairview Mall 出发往东排 10 家，避开已签约店")
+    Human->>Agent: 自然语言指令 (例如: "从 Fairview Mall 出发向东排 20 家精品咖啡，避开黑名单")
     Agent->>Engine: 后台静默执行 (解析起点经纬度、走廊推进角度、排除源路径)
 
     %% 阶段 2: 走廊商户探测
     Note over Engine, Maps: 阶段 2: 走廊多跳商户探测
     Engine->>Maps: 并发探测走廊各中心点 (Language: EN, places.photos, reviews)
-    Maps-->>Engine: 返回候选商户池 (名称、地址、电话、营业时间、照片 URL、评价)
+    Maps-->>Engine: 返回候选场所池 (名称、地址、电话、营业时间、照片 URL、评价)
 
     %% 阶段 3: 黑名单与已有场所排重 (双层消歧)
     Note over Engine, Jev: 阶段 3: 黑名单与已有场所排重 (双层消歧)
     Engine->>Sources: 摄取黑名单与排除源 (exclusion_sources)
     Sources-->>Engine: 返回异构表单数据 (Excel / CSV / JSON / REST API)
     Engine->>Engine: Tier 1 硬匹配 (Place ID、规范化电话与名称精确排重)
-    opt 存在别名 / 多店混淆
+    opt 存在别名 / 多店混淆 (配置 Jev 时)
         Engine->>Jev: Tier 2 语义消歧 (比较场所名、商圈与黑名单记录)
         Jev-->>Engine: 判定同店概率 (识别连锁新分店不误杀，真实同实体彻底排除)
     end
-    Engine->>Engine: 营业状态守门 (排除永久停业与公休日场所)
+    Engine->>Engine: 营业状态守门 (排除永久停业、公休与非营业时段场所)
 
     %% 阶段 4: 级联主动研判与智能体多模态视觉
     Note over Engine, Agent: 阶段 4: 级联主动研判与智能体多模态视觉
-    Engine->>Jev: Tier 1 文本初筛 (评估业务实体、设施与服务准入)
-    Jev-->>Engine: 返回决策置信度与类别 (DEFINITIVE_PASS / REJECT / AMBIGUOUS)
-    alt 高置信通过 (P >= 0.85，明确符合准入条件的目标场所)
-        Engine->>Engine: 直接锁定为符合条件商户 (零图像开销)
-    else 明确排除 (P <= 0.30，明确不符的主营业务或非目标业态)
-        Engine->>Engine: 直接剔除 (零图像开销)
-    else 模糊存疑 (0.30 < P < 0.85，如混合业态、复合门店、多服务场所)
-        Engine->>Maps: 仅拉取存疑商户的门头与实景照片
-        Maps-->>Engine: 下载高清图片至临时目录 /photos/
-        Engine->>Engine: 生成精简待审清单 (pending_agent_audit.json)
-        Engine-->>Agent: 提报存疑商家照片本地路径
-        Agent->>Agent: 触发原生多模态视觉介入 (调用内置 view_file 查验实拍图)
-        Note over Agent: 视觉识别门面招牌、专业设备设施、服务工位
-        Agent->>Engine: 写入视觉研判裁定 (agent_audit_results.json)
+    alt Zero-API 模式 (未配置 Jev Key，零外部费用)
+        Engine->>Maps: 批量拉取候选场所实拍门面与设施照片
+        Maps-->>Engine: 下载高清图片至本地 /photos/
+        Engine->>Engine: 导出自解释工单包 (pending_agent_audit.json)
+        Engine-->>Agent: 触发中断握手信号 [AGENT_ACTION_REQUIRED] 并暂停退出
+        Note over Agent: 智能体命中 SOP 铁律，识别到必须自主介入
+        Agent->>Agent: 调用 read_file / view_file 查验工单与门面实拍图
+        Note over Agent: 运用自身商业常识与原生视觉做出 True/False 裁决
+        Agent->>Engine: 写入裁决缓存 (agent_audit_results.json) 并自动重跑原命令
         Engine->>Engine: 100% 最高优先级吸纳智能体视觉结论
+    else Jev 级联模式 (配置 Jev Key)
+        Engine->>Jev: Tier 1 文本初筛 (评估业务实体、设施与服务准入)
+        Jev-->>Engine: 返回决策置信度与类别 (DEFINITIVE_PASS / REJECT / AMBIGUOUS)
+        alt 高置信通过 (P >= 0.85，明确符合准入条件的目标场所)
+            Engine->>Engine: 毫秒级锁定为符合条件场所 (零图像开销)
+        else 明确排除 (P <= 0.30，明确不符的主营业务或非目标业态)
+            Engine->>Engine: 毫秒级直接剔除 (零图像开销)
+        else 模糊存疑 (0.30 < P < 0.85，如混合业态、复合门店、多服务场所)
+            Engine->>Maps: 仅拉取存疑商户的门头与实景照片
+            Maps-->>Engine: 下载高清图片至临时目录 /photos/
+            Engine-->>Agent: 提报存疑照片本地路径
+            Agent->>Agent: 调用内置 view_file 查验门面招牌与专业设施
+            Agent->>Engine: 写入视觉裁定 (agent_audit_results.json)
+            Engine->>Engine: 100% 最高优先级吸纳智能体视觉结论
+        end
     end
 
     %% 阶段 5: 单向走廊规划与云端落盘
