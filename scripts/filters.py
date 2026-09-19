@@ -4,9 +4,9 @@ import re
 from typing import List, Dict, Tuple, Set, Optional, Any
 
 try:
-    from opening_hours import check_restaurant_open_status
+    from opening_hours import check_place_open_status
 except ImportError:
-    def check_restaurant_open_status(restaurant, visit_date_str="", departure_time_str="", allow_dinner_only=False, max_acceptable_open_hour=17):
+    def check_place_open_status(place, visit_date_str="", departure_time_str="", allow_dinner_only=False, max_acceptable_open_hour=17):
         return True, "营业中"
 
 try:
@@ -33,7 +33,6 @@ def normalize_phone(phone: str) -> str:
 def normalize_text(text: str) -> str:
     if not text:
         return ""
-    # Lowercase, remove punctuation and extra spaces
     cleaned = re.sub(r"[^\w\s\u4e00-\u9fa5]", " ", text.lower())
     return re.sub(r"\s+", " ", cleaned).strip()
 
@@ -47,17 +46,11 @@ def extract_brand_tokens(name: str) -> Set[str]:
         "lounge", "bistro", "diner", "place", "original", "famous", "best",
         "studio", "clinic", "salon", "services", "service", "spa", "auto", "repair",
         "gym", "fitness", "hotel", "motel", "club", "lab", "dental", "care", "mart",
-        # Generic food & cuisine categories
-        "chicken", "wings", "burger", "burgers", "hotdog", "hotdogs", "dog", "dogs",
-        "tacos", "taco", "pizza", "sushi", "noodle", "noodles", "rice", "fried",
-        "donkatsu", "tonkatsu", "katsu", "seafood", "fish", "chips", "pot", "tofu",
-        "dumplings", "tea", "coffee", "bakery", "asian", "korean", "japanese",
-        "chinese", "thai", "mexican", "halibut", "meals", "postpartum",
         # Region & geographic words
         "markham", "toronto", "scarborough", "york", "north", "south", "east", "west",
         "downtown", "richmond", "hill", "vaughan", "mississauga", "ontario", "canada", "gta",
         # Chinese stop words
-        "餐馆", "餐厅", "美食", "店", "分店", "料理", "快餐", "小吃", "北约克", "士嘉堡", "万锦", "多伦多", "会所", "中心", "工作室"
+        "店", "分店", "快餐", "小吃", "北约克", "士嘉堡", "万锦", "多伦多", "会所", "中心", "工作室", "馆"
     }
     clean = name.lower()
     clean = re.sub(r"\bbb\.?q\b", "bbq", clean)
@@ -87,9 +80,9 @@ try:
 except ImportError:
     JevDecisionClient = None
 
-CHAIN_BRANDS = {
-    "popeyes", "kfc", "bbq", "churchs", "jollibee", "mcdonalds",
-    "wendys", "mary", "browns", "buffalo", "wild", "wings", "fry"
+KNOWN_CHAINS = {
+    "popeyes", "kfc", "mcdonalds", "wendys", "subway", "starbucks",
+    "timhortons", "anytimefitness", "goodlife", "jiffylube"
 }
 
 def semantic_entity_match(
@@ -98,10 +91,10 @@ def semantic_entity_match(
     jev_client: Optional[Any] = None
 ) -> Tuple[bool, float, str, Optional[Dict]]:
     """
-    Tier 2: Model-driven semantic entity matching.
+    Tier 2: Model-driven semantic entity matching for places.
     Resolves variations in branch names, brand aliases, and spatial address overlaps.
     Accurately differentiates chain branches (requiring address consistency) from
-    unique independent restaurants.
+    unique independent establishments.
     Integrates TypeSafe AI Jev decision model (System One) with seamless heuristic fallback.
     Returns: (is_matched, confidence, rationale, matched_record)
     """
@@ -130,13 +123,12 @@ def semantic_entity_match(
                 if is_m:
                     return True, conf, f"Jev 决策: {rationale}", ref
                 elif rel == "chain_different_branch":
-                    # Same chain brand but distinct physical branch: proceed without false exclusion
                     continue
 
         # 2. Local heuristic rule fallback
         r_num, r_addr_tokens = extract_address_features(r_addr)
         shared_brand_name = list(common_brands)[0]
-        is_chain = any(b in CHAIN_BRANDS for b in common_brands)
+        is_chain = any(b in KNOWN_CHAINS for b in common_brands)
 
         # Case A: Same brand and exact same street number (Definite match)
         if c_num and r_num and c_num == r_num:
@@ -160,10 +152,10 @@ def semantic_entity_match(
                     ref
                 )
 
-        # Case C: Independent unique brands (e.g. Wohebaobei, Kate & Jan, Chungchun)
+        # Case C: Independent unique brands
         if not is_chain:
             for b in common_brands:
-                if len(b) >= 6 or b in ("chungchun", "wohebaobei", "banban", "kosam", "bullger", "akoya"):
+                if len(b) >= 6:
                     return (
                         True,
                         0.89,
@@ -173,15 +165,13 @@ def semantic_entity_match(
 
     return False, 0.0, "", None
 
-class RestaurantFilter:
+class PlaceFilter:
     def __init__(
         self,
         contracted_path: Optional[str] = None,
         visited_path: Optional[str] = None,
         exclude_regions: Optional[List[str]] = None,
         include_regions: Optional[List[str]] = None,
-        exclude_restaurants: Optional[List[str]] = None,
-        mandatory_restaurants: Optional[List[str]] = None,
         exclude_places: Optional[List[str]] = None,
         mandatory_places: Optional[List[str]] = None,
         visit_date: str = "",
@@ -199,10 +189,13 @@ class RestaurantFilter:
         self.visited_data = load_exclusion_source(visited_path) if visited_path else []
         self.exclude_regions = [r.lower().strip() for r in (exclude_regions or []) if r and r.strip()]
         self.include_regions = [r.lower().strip() for r in (include_regions or []) if r and r.strip()]
-        raw_exclude = exclude_places if exclude_places is not None else exclude_restaurants
-        self.exclude_restaurants = [r.lower().strip() for r in (raw_exclude or []) if r and r.strip()]
-        raw_mandatory = mandatory_places if mandatory_places is not None else mandatory_restaurants
-        self.mandatory_restaurants = [r.lower().strip() for r in (raw_mandatory or []) if r and r.strip()]
+        
+        # Support direct place exclusion/pinning list
+        raw_exclude = exclude_places if exclude_places is not None else kwargs.get("exclude_restaurants")
+        self.exclude_places = [r.lower().strip() for r in (raw_exclude or []) if r and r.strip()]
+        raw_mandatory = mandatory_places if mandatory_places is not None else kwargs.get("mandatory_restaurants")
+        self.mandatory_places = [r.lower().strip() for r in (raw_mandatory or []) if r and r.strip()]
+        
         self.visit_date = visit_date
         self.departure_time = departure_time
         self.filter_closed = filter_closed
@@ -234,59 +227,53 @@ class RestaurantFilter:
             print(f"  [Config] 已配置地理禁行/避开区域: {', '.join(self.exclude_regions)}")
         if self.include_regions:
             print(f"  [Config] 已配置地理限定区域: {', '.join(self.include_regions)}")
-        if self.exclude_restaurants:
-            print(f"  [Config] 已配置临时排除餐馆: {', '.join(self.exclude_restaurants)}")
-        if self.mandatory_restaurants:
-            print(f"  [Config] 已配置指定必选餐馆: {', '.join(self.mandatory_restaurants)}")
+        if self.exclude_places:
+            print(f"  [Config] 已配置临时排除场所: {', '.join(self.exclude_places)}")
+        if self.mandatory_places:
+            print(f"  [Config] 已配置指定必选场所: {', '.join(self.mandatory_places)}")
         if self.filter_closed:
             dinner_desc = "允许夜宵酒吧" if self.allow_dinner_only else "白天非营业时段自动过滤"
             print(f"  [Status] 已启用开业状态与公休日校验 (拜访日: {self.visit_date or '今日'}, 预定出发: {self.departure_time}, {dinner_desc})")
         if self.jev_client and getattr(self.jev_client, "is_ready", lambda: False)():
             print("  [AI Model] TypeSafe Jev 决策模型已就绪 (官方 SystemOne 接口)")
 
-    def is_mandatory(self, restaurant: Dict) -> Tuple[bool, str]:
-        """Checks if a restaurant is explicitly requested or pinned by the user."""
-        if restaurant.get("_is_pinned"):
-            return True, "[用户指定必选] 已置顶为今日必拜访商家"
-        if not self.mandatory_restaurants:
+    def is_mandatory(self, place: Dict) -> Tuple[bool, str]:
+        """Checks if a place is explicitly requested or pinned by the user."""
+        if place.get("_is_pinned"):
+            return True, "[用户指定必选] 已置顶为今日必拜访场所"
+        if not self.mandatory_places:
             return False, ""
-        name = (restaurant.get("name") or "").lower()
-        addr = (restaurant.get("address") or "").lower()
-        pid = (restaurant.get("placeId") or restaurant.get("id") or "").lower()
-        for mand in self.mandatory_restaurants:
+        name = (place.get("name") or "").lower()
+        addr = (place.get("address") or "").lower()
+        pid = (place.get("placeId") or place.get("id") or "").lower()
+        for mand in self.mandatory_places:
             if mand and (mand in name or mand in addr or mand == pid):
                 return True, f"[用户指定必选] 匹配必选关键词: '{mand}'"
         return False, ""
 
-    def is_manually_excluded(self, restaurant: Dict) -> Tuple[bool, str]:
-        """Checks if a restaurant is explicitly excluded by the user."""
-        if not self.exclude_restaurants:
+    def is_manually_excluded(self, place: Dict) -> Tuple[bool, str]:
+        """Checks if a place is explicitly excluded by the user."""
+        if not self.exclude_places:
             return False, ""
-        name = (restaurant.get("name") or "").lower()
-        addr = (restaurant.get("address") or "").lower()
-        pid = (restaurant.get("placeId") or restaurant.get("id") or "").lower()
-        for ex in self.exclude_restaurants:
+        name = (place.get("name") or "").lower()
+        addr = (place.get("address") or "").lower()
+        pid = (place.get("placeId") or place.get("id") or "").lower()
+        for ex in self.exclude_places:
             if ex and (ex in name or ex in addr or ex == pid):
-                return True, f"[手动指定排除] 命中排除餐馆: '{ex}'"
+                return True, f"[手动指定排除] 命中排除场所: '{ex}'"
         return False, ""
 
-    def is_region_excluded(self, restaurant: Dict) -> Tuple[bool, str]:
-        """
-        Evaluates geofencing constraints:
-        - Negative constraint: If address/region contains any word in exclude_regions -> Exclude!
-        - Positive constraint: If include_regions is specified, address/region MUST contain at least one -> Exclude if not matched!
-        """
-        addr = (restaurant.get("address") or "").lower()
-        region = (restaurant.get("region") or "").lower()
-        name = (restaurant.get("name") or "").lower()
+    def is_region_excluded(self, place: Dict) -> Tuple[bool, str]:
+        """Evaluates geofencing constraints."""
+        addr = (place.get("address") or "").lower()
+        region = (place.get("region") or "").lower()
+        name = (place.get("name") or "").lower()
         full_loc = f"{addr} {region} {name}"
 
-        # 1. Negative geofence (e.g. "不要去士嘉堡" -> exclude_regions=['scarborough'])
         for ex in self.exclude_regions:
             if ex in full_loc:
                 return True, f"[地理禁行] 命中避开关键词: '{ex}'"
 
-        # 2. Positive geofence (e.g. "在万锦范围内找" -> include_regions=['markham'])
         if self.include_regions:
             matched = any(inc in full_loc for inc in self.include_regions)
             if not matched:
@@ -325,57 +312,49 @@ class RestaurantFilter:
             if name:
                 self.visited_names.add(name)
 
-    def is_contracted(self, restaurant: Dict) -> Tuple[bool, str]:
-        """
-        Returns: (is_contracted, match_reason)
-        """
-        # Tier 1: Deterministic Hard Match
-        pid = restaurant.get("placeId") or restaurant.get("id", "")
+    def is_contracted(self, place: Dict) -> Tuple[bool, str]:
+        """Returns: (is_contracted, match_reason)"""
+        pid = place.get("placeId") or place.get("id", "")
         if pid and pid in self.contracted_place_ids:
             return True, f"[精确匹配] Place ID: {pid}"
 
-        phone = normalize_phone(restaurant.get("phone") or restaurant.get("nationalPhoneNumber", ""))
+        phone = normalize_phone(place.get("phone") or place.get("nationalPhoneNumber", ""))
         if phone and phone in self.contracted_phones:
             return True, f"[精确匹配] 电话号码: {phone}"
 
-        norm_name = normalize_text(restaurant.get("name") or "")
+        norm_name = normalize_text(place.get("name") or "")
         if norm_name and norm_name in self.contracted_names:
             return True, f"[精确匹配] 名称完全一致: {norm_name}"
 
-        # Tier 2: Model Semantic Entity Resolution (Jev or Heuristic)
-        matched, conf, rationale, ref = semantic_entity_match(restaurant, self.contracted_data, jev_client=self.jev_client)
+        matched, conf, rationale, ref = semantic_entity_match(place, self.contracted_data, jev_client=self.jev_client)
         if matched and conf >= 0.70:
             ref_name = ref.get("name", "") if ref else ""
             return True, f"[模型语义对齐] 与签约商家 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"
 
         return False, ""
 
-    def is_visited(self, restaurant: Dict) -> Tuple[bool, str]:
-        """
-        Returns: (is_visited, match_reason)
-        """
-        # Tier 1: Deterministic Hard Match
-        pid = restaurant.get("placeId") or restaurant.get("id", "")
+    def is_visited(self, place: Dict) -> Tuple[bool, str]:
+        """Returns: (is_visited, match_reason)"""
+        pid = place.get("placeId") or place.get("id", "")
         if pid and pid in self.visited_place_ids:
             return True, f"[精确匹配] Place ID: {pid}"
 
-        phone = normalize_phone(restaurant.get("phone") or restaurant.get("nationalPhoneNumber", ""))
+        phone = normalize_phone(place.get("phone") or place.get("nationalPhoneNumber", ""))
         if phone and phone in self.visited_phones:
             return True, f"[精确匹配] 电话号码: {phone}"
 
-        norm_name = normalize_text(restaurant.get("name") or "")
+        norm_name = normalize_text(place.get("name") or "")
         if norm_name and norm_name in self.visited_names:
             return True, f"[精确匹配] 名称完全一致: {norm_name}"
 
-        # Tier 2: Model Semantic Entity Resolution (Jev or Heuristic)
-        matched, conf, rationale, ref = semantic_entity_match(restaurant, self.visited_data, jev_client=self.jev_client)
+        matched, conf, rationale, ref = semantic_entity_match(place, self.visited_data, jev_client=self.jev_client)
         if matched and conf >= 0.70:
             ref_name = ref.get("name", "") if ref else ""
             return True, f"[模型语义对齐] 与拜访记录 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"
 
         return False, ""
 
-    def filter_restaurants(self, candidates: List[Dict]) -> Tuple[List[Dict], Dict]:
+    def filter_places(self, candidates: List[Dict]) -> Tuple[List[Dict], Dict]:
         accepted = []
         stats = {
             "total_input": len(candidates),
@@ -419,7 +398,7 @@ class RestaurantFilter:
                 accepted.append(r_copy)
                 continue
 
-            # 2. Manual restaurant exclusion (e.g. "不要去 KFC")
+            # 2. Manual place exclusion
             is_man_ex, man_reason = self.is_manually_excluded(r)
             if is_man_ex:
                 stats["excluded_manual"] += 1
@@ -439,10 +418,10 @@ class RestaurantFilter:
                 })
                 continue
 
-            # 4. Opening Hours & Operational Status Check (Closed/Rest day/Late night only)
+            # 4. Opening Hours & Operational Status Check
             if self.filter_closed:
-                is_open, closed_reason = check_restaurant_open_status(
-                    restaurant=r,
+                is_open, closed_reason = check_place_open_status(
+                    place=r,
                     visit_date_str=self.visit_date,
                     departure_time_str=self.departure_time,
                     allow_dinner_only=self.allow_dinner_only
@@ -491,12 +470,3 @@ class RestaurantFilter:
 
         stats["accepted_count"] = len(accepted)
         return accepted, stats
-
-    def filter_places(self, candidates: List[Dict]) -> Tuple[List[Dict], Dict]:
-        """Generic alias for filter_restaurants across all public place types."""
-        return self.filter_restaurants(candidates)
-
-# Export generic aliases for universal scouting
-PlaceFilter = RestaurantFilter
-check_place_open_status = check_restaurant_open_status
-

@@ -10,9 +10,16 @@
     "longitude": -79.4111
   },
   "target_count": 30,
-  "place_types": ["restaurant"],
-  "template": "fried_food",
-  "criteria": "",
+  "place_types": ["cafe"],
+  "template": "coffee",
+  "criteria": "artisan coffee roasters and craft espresso bars",
+  "keywords": [
+    "specialty coffee",
+    "roastery",
+    "espresso bar",
+    "pour over",
+    "artisan cafe"
+  ],
   "corridor_settings": {
     "default_direction": "east",
     "corridor_width_km": 4.5,
@@ -30,29 +37,6 @@
     "west": { "bearing": 270, "description": "西向 (Westward towards Mississauga / Brampton)" },
     "northwest": { "bearing": 315, "description": "西北向 (Northwest towards Vaughan / Woodbridge)" }
   },
-  "fried_keywords": [
-    "fried chicken",
-    "chicken wings",
-    "korean fried chicken",
-    "fish and chips",
-    "tonkatsu",
-    "katsu",
-    "tempura",
-    "korean corn dog",
-    "taiwanese fried chicken",
-    "nashville hot chicken",
-    "churros",
-    "popeyes",
-    "churchs texas chicken",
-    "jollibee",
-    "mary browns",
-    "buffalo wild wings",
-    "bb.q chicken",
-    "the fry",
-    "kokodak",
-    "salt and pepper chicken",
-    "halibut and chips"
-  ],
   "schedule": {
     "enabled": false,
     "cron": "0 21 * * *",
@@ -69,6 +53,6 @@
   "google_sheets": {
     "enabled": false,
     "webhook_url": "https://script.google.com/macros/s/YOUR_APPS_SCRIPT_DEPLOYMENT_ID/exec",
-    "sheet_name": "Daily Field Sales Route"
+    "sheet_name": "Daily Places Scout Route"
   }
 }

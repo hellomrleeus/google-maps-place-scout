@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TypeSafe AI Jev Decision Client for Daily Restaurant Lead Scout.
+TypeSafe AI Jev Decision Client for Google Maps Place Scout.
 Interfaces with TypeSafe AI System One API (POST https://api.typesafe.ai/v1/systemone)
 using the typed decision model `jev-latest`.
 
@@ -10,7 +10,7 @@ Philosophy:
 Provides:
 1. Low-level `query_decisions(state, questions)`
 2. High-level `evaluate_entity_match(candidate, reference)`
-3. High-level `evaluate_fried_food(place)`
+3. High-level `evaluate_place(place, criteria, template)`
 4. Graceful fallback when API key is unconfigured or request fails.
 """
 
@@ -22,24 +22,21 @@ from typing import Dict, Any, Optional, Tuple, List
 
 DEFAULT_JEV_MODEL = "jev-latest"
 TYPESAFE_SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone"
-OPENROUTER_DECISIONS_URL = TYPESAFE_SYSTEMONE_URL  # Backward compatibility alias
+OPENROUTER_DECISIONS_URL = TYPESAFE_SYSTEMONE_URL
 
 class JevMatchResult(tuple):
     """
     Generalized typed decision result.
-    Backwards-compatible tuple that unpacks as 4 elements:
-    (is_match, conf, features, rationale)
-    while exposing .tier_status, .is_fried (alias for .is_match), and .dishes (alias for .features).
+    Tuple that unpacks as 4 elements: (is_match, conf, features, rationale)
+    while exposing .tier_status, .is_match, .features, and .confidence.
     """
     def __new__(cls, is_match, conf, features, rationale, tier_status="DEFINITIVE_PASS"):
         return super(JevMatchResult, cls).__new__(cls, (is_match, conf, features, rationale))
 
     def __init__(self, is_match, conf, features, rationale, tier_status="DEFINITIVE_PASS"):
         self.is_match = is_match
-        self.is_fried = is_match  # Backward compatibility alias
         self.confidence = conf
         self.features = features
-        self.dishes = features    # Backward compatibility alias
         self.rationale = rationale
         self.tier_status = tier_status
 
@@ -49,13 +46,10 @@ class JevMatchResult(tuple):
             f"features={self.features}, tier_status='{self.tier_status}')"
         )
 
-# Backward-compatibility alias
-JevFriedResult = JevMatchResult
-
 def classify_jev_tier(
     noul_val: float,
     cat_choice: str = "",
-    oil_score: int = 0,
+    quality_score: int = 0,
     is_negative_category: Optional[bool] = None
 ) -> str:
     """
@@ -65,15 +59,15 @@ def classify_jev_tier(
     3. NEED_MULTIMODAL_INSPECTION: Borderline / ambiguous (0.30 < P < 0.85), needs vision inspection.
     """
     if is_negative_category is None:
-        is_negative_category = (cat_choice in ("non_fried", "non_coffee", "unrelated"))
+        is_negative_category = (cat_choice in ("unrelated", "non_target", "non_coffee"))
 
     if (noul_val >= 0.85 and not is_negative_category) or (
-        cat_choice in ("fried_chicken", "fast_food_burgers", "fish_and_chips", "specialty_roaster", "detailing_studio", "strength_gym")
-        and oil_score >= 2
+        cat_choice in ("specialty_roaster", "detailing_studio", "strength_gym", "specialized_core", "specialty_dining")
+        and quality_score >= 2
         and noul_val >= 0.70
     ):
         return "DEFINITIVE_PASS"
-    elif noul_val <= 0.30 or (is_negative_category and oil_score == 0 and noul_val <= 0.40):
+    elif noul_val <= 0.30 or (is_negative_category and quality_score == 0 and noul_val <= 0.40):
         return "DEFINITIVE_REJECT"
     else:
         return "NEED_MULTIMODAL_INSPECTION"
@@ -85,45 +79,7 @@ def build_criteria_spec(criteria: str = "", template: str = "general") -> Dict[s
     t_lower = (template or "").lower().strip()
     c_lower = (criteria or "").lower().strip()
 
-    if t_lower in ("fried_food", "fried", "restaurant") or "fried" in c_lower or "fryer" in c_lower:
-        return {
-            "template": "fried_food",
-            "decision_field": "has_commercial_fryer",
-            "criteria_description": "commercial deep fryers and deep-fried food offerings",
-            "system_prompt": "Evaluate whether this restaurant operates commercial deep fryers and actively sells deep-fried foods.",
-            "field_label": "Fried Food Category",
-            "noul_instructions": "Does this restaurant operate commercial deep fryers and actively sell deep-fried food (e.g. fried chicken, wings, french fries, fish and chips, katsu, tempura, donuts)?",
-            "noul_criteria": {
-                "true": "Core menu or popular items include deep-fried foods using commercial fryers",
-                "false": "No deep fryers expected (e.g. salad bar, bakery, pure cafe, raw sushi bar without tempura)"
-            },
-            "category_instructions": "What is the primary fried food offering category of this merchant?",
-            "category_criteria": {
-                "fried_chicken": "Fried chicken, wings, tenders, Korean fried chicken",
-                "fast_food_burgers": "Burgers, french fries, onion rings",
-                "fish_and_chips": "Fish and chips, fried seafood",
-                "asian_fried": "Tonkatsu, katsu, tempura, karaage, egg rolls",
-                "pub_and_grill": "Pub food, calamari, mozzarella sticks, poutine",
-                "non_fried": "Minimal or no fried food items"
-            },
-            "category_labels": {
-                "fried_chicken": "Fried Chicken & Wings",
-                "fast_food_burgers": "Burgers & Fries Fast Food",
-                "fish_and_chips": "Fish & Chips / Seafood",
-                "asian_fried": "Asian Fried (Katsu/Tempura)",
-                "pub_and_grill": "Pub & Grill Fried Snacks",
-                "non_fried": "Non-fried Primary"
-            },
-            "negative_categories": ["non_fried"],
-            "tier_instructions": "What is the expected cooking oil usage intensity for this establishment?",
-            "tier_criteria": [
-                "Negligible/None",
-                "Moderate (occasional fried sides/appetizers)",
-                "Heavy (core business relies on commercial fryers)"
-            ],
-            "evidence_prefix": "Fryer probability"
-        }
-    elif t_lower in ("coffee", "cafe") or "coffee" in c_lower or "cafe" in c_lower:
+    if t_lower in ("coffee", "cafe") or "coffee" in c_lower or "cafe" in c_lower:
         crit_desc = criteria or "specialty artisan coffee, pour over, single-origin beans, or craft espresso"
         return {
             "template": "coffee",
@@ -159,6 +115,41 @@ def build_criteria_spec(criteria: str = "", template: str = "general") -> Dict[s
                 "Master/Specialty single-origin, micro-lot roasting"
             ],
             "evidence_prefix": "Specialty match probability"
+        }
+    elif t_lower in ("dining", "restaurant") or "dining" in c_lower:
+        crit_desc = criteria or "quality sit-down dining or specialized culinary offerings"
+        return {
+            "template": "dining",
+            "decision_field": "matches_culinary_criteria",
+            "criteria_description": crit_desc,
+            "system_prompt": f"Evaluate whether this establishment matches the dining criteria: {crit_desc}.",
+            "field_label": "Dining Category",
+            "noul_instructions": f"Does this restaurant specialize in or actively serve: {crit_desc}?",
+            "noul_criteria": {
+                "true": f"Core menu or cuisine directly features {crit_desc}",
+                "false": f"Does not feature or offer {crit_desc}"
+            },
+            "category_instructions": "What is the primary dining format of this establishment?",
+            "category_criteria": {
+                "specialty_dining": "Dedicated specialty restaurant / bistro",
+                "casual_dining": "Full-service casual dining restaurant",
+                "fast_casual": "Fast-casual or quick counter service",
+                "unrelated": "Not a dining establishment"
+            },
+            "category_labels": {
+                "specialty_dining": "Specialty Dining",
+                "casual_dining": "Casual Dining",
+                "fast_casual": "Fast Casual",
+                "unrelated": "Unrelated"
+            },
+            "negative_categories": ["unrelated"],
+            "tier_instructions": "What is the culinary quality and specialization level?",
+            "tier_criteria": [
+                "Basic/Standard commercial",
+                "Craft/Handmade fresh cuisine",
+                "Premium culinary destination"
+            ],
+            "evidence_prefix": "Dining match probability"
         }
     elif t_lower in ("auto", "car") or "car" in c_lower or "detailing" in c_lower or "ppf" in c_lower:
         crit_desc = criteria or "auto detailing, paint protection film (PPF), ceramic coating, or car care"
@@ -466,7 +457,7 @@ class JevDecisionClient:
 
         cat_labels = spec.get("category_labels", {})
         category_label = cat_labels.get(cat_choice, cat_choice)
-        negative_categories = spec.get("negative_categories", ["unrelated", "non_fried", "non_coffee"])
+        negative_categories = spec.get("negative_categories", ["unrelated", "non_target", "non_coffee"])
         is_neg = cat_choice in negative_categories
 
         tier_status = classify_jev_tier(noul_val, cat_choice, tier_score, is_negative_category=is_neg)
@@ -483,15 +474,5 @@ class JevDecisionClient:
         rationale = f"Jev decision: {prefix} {int(conf * 100)}%, category: {category_label}, tier: {tier_score}/2 [{tier_status}]"
 
         return JevMatchResult(is_match, conf, features, rationale, tier_status=tier_status)
-
-    def evaluate_fried_food(
-        self,
-        place: Dict[str, Any]
-    ) -> Optional[Tuple[bool, float, List[str], str]]:
-        """
-        Backward-compatible evaluation for fried food restaurants.
-        Returns: (is_fried, confidence, dishes, rationale) or None if Jev unavailable.
-        """
-        return self.evaluate_place(place, template="fried_food")
 
 

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Agent-Native Multimodal Auditor for Fried Food Detection.
+Agent-Native Multimodal Auditor for Universal Place Verification.
 Zero External Vision API Dependency.
 
 Architecture (Cascaded Active Multimodal Evaluation):
-1. Tier 1: Jev Decision Client (~typesafe/jev-latest) performs fast text triage.
+1. Tier 1: Jev Decision Client (~typesafe/jev-latest) performs fast typed text triage.
    - High confidence positive (P >= 0.85): instant pass (no image needed).
    - High confidence negative (P <= 0.30): instant reject (no image needed).
 2. Tier 2: For ambiguous / borderline candidates (0.30 < P < 0.85):
-   - Photos from Google Places are downloaded to the system temporary directory.
+   - Storefront & venue photos from Google Places are downloaded to the system temporary directory.
    - Ambiguous candidates are exported to pending_agent_audit.json with local photo paths.
-   - The executing AI Agent (Antigravity / Gemini) visually inspects the photos using native view_file.
+   - The executing AI Agent visually inspects the photos using native view_file.
    - Verified decisions in agent_audit_results.json take absolute precedence.
-3. Tier 3: Local culinary NLP heuristic for autonomous offline fallbacks.
+3. Tier 3: Universal criteria & keyword NLP heuristic for autonomous offline fallbacks.
 """
 
 import os
@@ -26,27 +26,16 @@ try:
     from config_manager import get_temp_dir
 except ImportError:
     def get_temp_dir(subfolder: str = "audit") -> str:
-        d = os.path.join(tempfile.gettempdir(), "restaurant_lead_scout", subfolder)
+        d = os.path.join(tempfile.gettempdir(), "place_scout", subfolder)
         os.makedirs(d, exist_ok=True)
         return d
 
-FRIED_DISH_PATTERNS = [
-    "french fries", "fries", "chips", "fried chicken", "wings", "buffalo wings",
-    "chicken wings", "tenders", "nuggets", "popcorn chicken", "korean fried chicken",
-    "tonkatsu", "katsu", "tempura", "karaage", "fish and chips", "halibut and chips",
-    "calamari", "fried squid", "onion rings", "corn dog", "rice dog", "churros",
-    "funnel cake", "doughnuts", "donuts", "spring rolls", "egg rolls", "wontons",
-    "samosa", "samosas", "falafel", "schnitzel", "empanadas", "chimichanga",
-    "fried rice", "tater tots", "hushpuppies", "fried pickles", "poutine",
-    "salt and pepper chicken", "salt & pepper squid", "deep fried"
-]
-
 try:
-    from jev_client import JevDecisionClient, classify_jev_tier, JevFriedResult
+    from jev_client import JevDecisionClient, classify_jev_tier, JevMatchResult
 except ImportError:
     JevDecisionClient = None
     classify_jev_tier = None
-    JevFriedResult = None
+    JevMatchResult = None
 
 def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0) -> bool:
     """Downloads a photo from a URL to a local destination file."""
@@ -57,7 +46,7 @@ def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0) -> 
     try:
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (DailyRestaurantLeadScout/1.0)"}
+            headers={"User-Agent": "Mozilla/5.0 (GoogleMapsPlaceScout/1.0)"}
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = resp.read()
@@ -69,7 +58,7 @@ def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0) -> 
         pass
     return False
 
-class AgentAuditManager:
+class PlaceAuditManager:
     def __init__(
         self,
         audit_dir: Optional[str] = None,
@@ -148,7 +137,7 @@ class AgentAuditManager:
         """
         Filters candidates to find ONLY ambiguous / borderline candidates needing
         Multimodal Agent visual verification (P between 0.30 and 0.85).
-        Downloads food photos to local disk so the Agent can inspect them with view_file.
+        Downloads venue photos to local disk so the Agent can inspect them with view_file.
         """
         os.makedirs(self.photos_dir, exist_ok=True)
         ambiguous_items = []
@@ -168,12 +157,7 @@ class AgentAuditManager:
             jev_rationale = ""
 
             if self.jev_client and getattr(self.jev_client, "is_ready", lambda: False)():
-                if hasattr(self.jev_client, "evaluate_place"):
-                    jev_eval = self.jev_client.evaluate_place(c, criteria=self.criteria, template=self.template)
-                elif hasattr(self.jev_client, "evaluate_fried_food"):
-                    jev_eval = self.jev_client.evaluate_fried_food(c)
-                else:
-                    jev_eval = None
+                jev_eval = self.jev_client.evaluate_place(c, criteria=self.criteria, template=self.template)
                 if jev_eval is not None:
                     _, conf, _, rat = jev_eval[:4]
                     tier_status = getattr(jev_eval, "tier_status", None)
@@ -186,12 +170,11 @@ class AgentAuditManager:
                         needs_audit = True
             else:
                 ptype = (c.get("primaryType") or "").lower()
-                borderline_types = ["japanese", "ramen", "izakaya", "asian", "chinese", "bistro", "tapas", "bar", "cafe", "bakery", "studio", "repair", "clinic"]
-                if any(bt in ptype for bt in borderline_types):
+                # Ambiguous when type contains mixed offerings
+                if any(k in ptype for k in ("store", "shop", "service", "center", "hall", "studio", "specialty")):
                     needs_audit = True
 
             if needs_audit:
-                # Download up to 2 photos locally for agent inspection
                 photo_urls = c.get("photo_urls", [])
                 local_paths = []
                 if download_images and photo_urls:
@@ -228,7 +211,7 @@ class AgentAuditManager:
            - If definitive pass (>=0.85): instant pass, no image needed.
            - If definitive reject (<=0.30): instant reject, no image needed.
            - If borderline (0.30 < P < 0.85): marked as ambiguous, uses agent decision if available.
-        3. Tier 3: Local heuristic fallback.
+        3. Tier 3: Universal heuristic fallback.
         """
         self.stats["total"] += 1
         pid = place.get("placeId") or place.get("id", "")
@@ -237,19 +220,14 @@ class AgentAuditManager:
         if pid in self.agent_decisions:
             self.stats["agent_cached"] += 1
             decision = self.agent_decisions[pid]
-            is_match = bool(decision.get("is_match", decision.get("is_fried", True)))
-            features = decision.get("features") or decision.get("fried_dishes") or decision.get("dishes") or ["agent-multimodal-verified"]
+            is_match = bool(decision.get("is_match", True))
+            features = decision.get("features") or ["agent-multimodal-verified"]
             rationale = decision.get("rationale") or decision.get("notes") or "Verified by AI Agent multimodal image inspection"
             return is_match, 1.0, features, rationale
 
         # 2. TypeSafe Jev Tiered Decision Model
         if self.jev_client and getattr(self.jev_client, "is_ready", lambda: False)():
-            if hasattr(self.jev_client, "evaluate_place"):
-                jev_eval = self.jev_client.evaluate_place(place, criteria=self.criteria, template=self.template)
-            elif hasattr(self.jev_client, "evaluate_fried_food"):
-                jev_eval = self.jev_client.evaluate_fried_food(place)
-            else:
-                jev_eval = None
+            jev_eval = self.jev_client.evaluate_place(place, criteria=self.criteria, template=self.template)
             if jev_eval is not None:
                 is_match, conf, features, rationale = jev_eval[:4]
                 tier_status = getattr(jev_eval, "tier_status", None)
@@ -263,18 +241,13 @@ class AgentAuditManager:
                     self.stats["jev_reject"] += 1
                     return False, conf, features, rationale
                 else:
-                    # Ambiguous candidate
                     self.stats["ambiguous_need_agent"] += 1
                     amb_rationale = f"Jev borderline ({int(conf * 100)}%): Pending Agent multimodal image review"
                     return is_match, conf, features, amb_rationale
 
-        # 3. Local high-recall heuristic fallback
+        # 3. Universal heuristic fallback
         self.stats["heuristic"] += 1
         return self._heuristic_audit(place)
-
-    def audit_restaurant(self, place: Dict) -> Tuple[bool, float, List[str], str]:
-        """Backward compatibility alias for audit_place."""
-        return self.audit_place(place)
 
     def _heuristic_audit(self, place: Dict) -> Tuple[bool, float, List[str], str]:
         name = place.get("name", "")
@@ -296,31 +269,10 @@ class AgentAuditManager:
             matched = [t for t in target_terms if t in haystack]
             if matched:
                 return True, 0.90, list(set(matched)), f"Matched target criteria terms: {', '.join(matched[:3])}"
-            # If no keywords matched, check if primary type or category has any overlap
             if any(t in primary_type.lower() for t in target_terms):
-                return True, 0.80, ["category match"], f"Category ({primary_type}) matches requested service/establishment"
-            if self.template not in ("fried_food", "fried"):
-                return False, 0.20, [], f"Did not match target criteria or keywords ({self.template})"
+                return True, 0.80, ["category match"], f"Category ({primary_type}) matches requested venue type"
+            return False, 0.20, [], f"Did not match target criteria or keywords ({self.template})"
 
-        # If fried food template, fallback to fried dish patterns
-        if self.template in ("fried_food", "fried") or not target_terms:
-            matched = [p for p in FRIED_DISH_PATTERNS if p in haystack]
-            fryer_heavy_types = [
-                "fast_food_restaurant", "hamburger_restaurant", "american_restaurant",
-                "japanese_restaurant", "korean_restaurant", "chicken_restaurant",
-                "seafood_restaurant", "bar_and_grill", "pub"
-            ]
-            is_fryer_type = any(t in primary_type.lower() for t in fryer_heavy_types)
-
-            if matched:
-                return True, 0.95, list(set(matched)), f"Detected fried dishes in menu/reviews: {', '.join(matched[:3])}"
-            elif is_fryer_type:
-                return True, 0.80, ["commercial fryer expected"], f"Category ({primary_type}) standardly operates commercial fryers"
-            elif self.template in ("fried_food", "fried"):
-                return False, 0.30, [], "No fried food items identified"
-
-        return True, 0.75, ["operational establishment"], f"Establishment active ({primary_type or 'business'})"
-
-# Backward compatibility alias
-PlaceAuditor = AgentAuditManager
-
+        # If no custom criteria or keywords provided, validate as active operational venue
+        p_type_label = primary_type.replace("_", " ").title() if primary_type else "Verified Establishment"
+        return True, 0.80, [p_type_label], f"Active place matching searched category ({primary_type or 'place'})"

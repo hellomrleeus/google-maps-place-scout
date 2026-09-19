@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Sheet exporter module for Daily Field Sales Route.
-Exports the finalized 30 confirmed restaurants to:
+Exports the finalized confirmed places to:
 1. Standard CSV file with 7 columns:
-   No., Restaurant Name, Address, Navigation Address, Opening Hours, Phone, Fried Food Evidence
+   No., Place Name, Address, Navigation Address, Opening Hours, Phone, Match Evidence
 2. Professionally styled Excel (.xlsx) file with openpyxl
 3. Google Sheets (via Google Apps Script Webhook)
 All fields are based on pure English Google Maps data.
@@ -38,17 +38,6 @@ except ImportError:
         dlam = math.radians(lon2 - lon1)
         a = math.sin(dphi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2.0)**2
         return 2.0 * r * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-
-# Standard 7 output columns in pure English
-EXPORT_HEADERS = [
-    "No.",
-    "Restaurant Name",
-    "Address",
-    "Navigation Address",
-    "Opening Hours",
-    "Phone",
-    "Fried Food Evidence"
-]
 
 UNIVERSAL_HEADERS = [
     "No.",
@@ -179,8 +168,8 @@ def extract_address_tokens(addr: str) -> Tuple[str, str, str]:
 
 def cluster_navigation_addresses(stops: List[Dict]) -> List[Dict]:
     """
-    Clusters and deduplicates navigation addresses across a list of restaurant stops.
-    Multiple restaurants located inside the same mall, plaza, or commercial complex
+    Clusters and deduplicates navigation addresses across a list of place stops.
+    Multiple places located inside the same mall, plaza, or commercial complex
     are assigned the exact identical canonical navigation address string.
     """
     if not stops:
@@ -247,64 +236,33 @@ def cluster_navigation_addresses(stops: List[Dict]) -> List[Dict]:
 
     return out_stops
 
-def normalize_rationale_to_english(rationale: Optional[str], dishes: Optional[List[str]] = None) -> str:
-    dishes = dishes or []
+def normalize_rationale_to_english(rationale: Optional[str], features: Optional[List[str]] = None) -> str:
+    features = features or []
     if not rationale:
-        if dishes and isinstance(dishes, list) and len(dishes) > 0:
-            return f"Detected fried items: {', '.join(str(d) for d in dishes[:3])}"
-        return "Core fried food category (commercial fryers equipped)"
+        if features and isinstance(features, list) and len(features) > 0:
+            return f"Matched features: {', '.join(str(d) for d in features[:3])}"
+        return "Verified active establishment matching criteria"
 
     text = str(rationale).strip()
 
     replacements = [
-        (r"检测到油炸菜品[:：]?\s*", "Detected fried items: "),
-        (r"检测到油炸菜品", "Detected fried items"),
         (r"用户指定必拜访商户", "Priority visit (User pinned merchant)"),
         (r"用户指定必选商家", "Priority visit (User pinned merchant)"),
+        (r"用户指定必选场所", "Priority visit (User pinned place)"),
         (r"用户指定必选", "Priority lead (User pinned)"),
-        (r"主营油炸品类\s*\(商用炸炉配置\)", "Core fried food category (commercial fryers equipped)"),
-        (r"主营油炸品类", "Core fried food category"),
-        (r"商用炸炉配置", "commercial fryers equipped"),
         (r"Jev\s*模型决策[:：]?\s*", "Jev decision: "),
         (r"Jev\s*决策[:：]?\s*", "Jev decision: "),
-        (r"炸炉概率[:：]?\s*", "Fryer probability: "),
-        (r"炸炉概率", "Fryer probability"),
         (r"品类[:：]?\s*", "category: "),
-        (r"估算用油等级[:：]?\s*", "estimated oil usage tier: "),
-        (r"炸鸡/鸡翅\s*\(Fried Chicken/Wings\)", "Fried Chicken & Wings"),
-        (r"炸鸡/鸡翅", "Fried Chicken & Wings"),
-        (r"汉堡薯条快餐\s*\(Burgers & Fries\)", "Burgers & Fries Fast Food"),
-        (r"汉堡薯条快餐", "Burgers & Fries Fast Food"),
-        (r"炸鱼薯条海鲜\s*\(Fish & Chips\)", "Fish & Chips / Seafood"),
-        (r"炸鱼薯条海鲜", "Fish & Chips / Seafood"),
-        (r"日韩炸物/天妇罗\s*\(Katsu/Tempura\)", "Asian Fried (Katsu/Tempura)"),
-        (r"日韩炸物/天妇罗", "Asian Fried (Katsu/Tempura)"),
-        (r"酒吧小食\s*\(Pub & Grill Fried\)", "Pub & Grill Fried Snacks"),
-        (r"酒吧小食", "Pub & Grill Fried Snacks"),
-        (r"特色韩式炸鸡", "Specialty Korean Fried Chicken"),
-        (r"韩式炸鸡", "Korean Fried Chicken"),
-        (r"炸鸡", "Fried Chicken"),
-        (r"炸炉", "Fryer"),
-        (r"薯条", "French Fries"),
-        (r"鸡翅", "Wings"),
-        (r"洋葱圈", "Onion Rings"),
-        (r"天妇罗", "Tempura"),
-        (r"炸鱼", "Fried Fish"),
-        (r"炸虾", "Fried Shrimp"),
-        (r"炸猪排", "Pork Cutlet (Tonkatsu)"),
-        (r"甜甜圈", "Donuts"),
-        (r"油条", "Chinese Fried Dough (Youtiao)"),
-        (r"高概率", "High probability"),
-        (r"中概率", "Medium probability"),
-        (r"低概率", "Low probability"),
-        (r"非油炸主营", "Non-fried primary"),
-        (r"未识别到油炸菜品", "No fried food items identified"),
+        (r"高概率(?:匹配)?", "High probability"),
+        (r"中概率(?:匹配)?", "Medium probability"),
+        (r"低概率(?:匹配)?", "Low probability"),
+        (r"匹配", "match"),
     ]
 
-    if dishes and isinstance(dishes, list) and len(dishes) > 0:
-        d_sample = str(dishes[0])
-        if d_sample not in text and d_sample != "commercial fryer expected" and d_sample != "agent-verified":
-            text = f"{text} ({', '.join(str(d) for d in dishes[:3])})"
+    if features and isinstance(features, list) and len(features) > 0:
+        d_sample = str(features[0])
+        if d_sample not in text and d_sample != "agent-verified":
+            text = f"{text} ({', '.join(str(d) for d in features[:3])})"
 
     for pat, repl in replacements:
         text = re.sub(pat, repl, text)
@@ -329,8 +287,8 @@ def map_stop_to_columns(stop: Dict, idx: int) -> List:
 
     # Audit rationale / evidence
     rationale = stop.get("_audit_rationale") or stop.get("audit_rationale")
-    dishes = stop.get("_matched_features") or stop.get("_fried_dishes") or stop.get("fried_dishes") or []
-    clean_rationale = normalize_rationale_to_english(rationale, dishes)
+    features = stop.get("_matched_features") or []
+    clean_rationale = normalize_rationale_to_english(rationale, features)
 
     return [
         idx + 1,
@@ -342,9 +300,6 @@ def map_stop_to_columns(stop: Dict, idx: int) -> List:
         clean_rationale
     ]
 
-# Backward compatibility alias
-map_stop_to_5_columns = map_stop_to_columns
-
 class SheetExporter:
     def __init__(
         self,
@@ -354,12 +309,7 @@ class SheetExporter:
     ):
         self.output_dir = output_dir or get_user_cache_dir("routes")
         os.makedirs(self.output_dir, exist_ok=True)
-        if headers:
-            self.headers = headers
-        elif template and template != "fried_food":
-            self.headers = UNIVERSAL_HEADERS
-        else:
-            self.headers = EXPORT_HEADERS
+        self.headers = headers or UNIVERSAL_HEADERS
 
     def export_csv(self, stops: List[Dict], filename: str) -> str:
         stops = cluster_navigation_addresses(stops)
@@ -487,12 +437,12 @@ class SheetExporter:
         csv_path = meta.get("csv_path", "")
 
         lines = [
-            f"# Restaurant Lead Scout Route Report ({visit_date})",
+            f"# Place Scout Route Report ({visit_date})",
             "",
             f"- **Date**: {visit_date} ({date_label})",
             f"- **Direction**: {direction}",
             f"- **Starting Base**: {origin_str}",
-            f"- **Total Stops**: {len(stops)} confirmed restaurants",
+            f"- **Total Stops**: {len(stops)} confirmed places",
             "",
         ]
         if legs:
@@ -521,8 +471,8 @@ class SheetExporter:
         lines.extend([
             "",
             "### Confirmed Stops Directory",
-            "| No. | Restaurant Name | Address | Navigation Address | Opening Hours | Phone | Fried Food Evidence |",
-            "|-----|-----------------|---------|--------------------|---------------|-------|---------------------|"
+            "| No. | Place Name | Address | Navigation Address | Opening Hours | Phone | Match Evidence |",
+            "|-----|------------|---------|--------------------|---------------|-------|----------------|",
         ])
 
         for idx, s in enumerate(stops):
@@ -634,7 +584,7 @@ class SheetExporter:
         log_path = os.path.join(self.output_dir, log_filename)
         try:
             with open(log_path, "w", encoding="utf-8") as f:
-                f.write(f"=== Daily Restaurant Lead Scout Execution Failure Alert ===\n")
+                f.write(f"=== Google Maps Place Scout Execution Failure Alert ===\n")
                 f.write(f"Timestamp: {timestamp}\n")
                 f.write(f"Visit Date: {visit_date}\n")
                 f.write(f"Direction: {direction} | Origin: {origin_str}\n")

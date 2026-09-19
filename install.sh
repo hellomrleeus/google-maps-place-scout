@@ -81,9 +81,6 @@ chmod +x "$DEST_DIR/scripts/main.py" 2>/dev/null || true
 if [ -f "$DEST_DIR/bin/place-scout" ]; then
   chmod +x "$DEST_DIR/bin/place-scout" 2>/dev/null || true
 fi
-if [ -f "$DEST_DIR/bin/restaurant-scout" ]; then
-  chmod +x "$DEST_DIR/bin/restaurant-scout" 2>/dev/null || true
-fi
 
 # If project mode and .gitignore exists, ensure .agents/ is ignored to prevent dirty repo status
 if [ "$TARGET_MODE" = "project" ] && [ -f ".gitignore" ]; then

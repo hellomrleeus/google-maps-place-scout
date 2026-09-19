@@ -255,15 +255,15 @@ ALL_DAYS = [
     {"index": 6, "short": "Sun", "full": "Sunday", "aliases": ["sunday", "sun", "星期日", "星期天", "周日", "周天"]},
 ]
 
-def check_restaurant_open_status(
-    restaurant: Dict,
+def check_place_open_status(
+    place: Dict,
     visit_date_str: str = "",
     departure_time_str: str = "09:30",
     allow_dinner_only: bool = False,
     max_acceptable_open_hour: int = 17
 ) -> Tuple[bool, str]:
     """
-    Evaluates whether a restaurant is operational and open during the planned visit date and time window.
+    Evaluates whether a place is operational and open during the planned visit date and time window.
     Checks:
     1. Business Status (filters out CLOSED_PERMANENTLY and CLOSED_TEMPORARILY).
     2. Target Day-of-Week (filters out rest days, e.g. Monday/Tuesday Closed).
@@ -276,12 +276,12 @@ def check_restaurant_open_status(
 
     # 1. Check Google Places Business Status
     b_status = (
-        restaurant.get("business_status")
-        or restaurant.get("businessStatus")
+        place.get("business_status")
+        or place.get("businessStatus")
         or ""
     ).upper().strip()
     if b_status in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"):
-        return False, f"店铺未营运 (状态: {b_status})"
+        return False, f"场所未营运 (状态: {b_status})"
 
     # If no visit date provided, default to today
     if not visit_date_str:
@@ -299,7 +299,7 @@ def check_restaurant_open_status(
     day_full = target_day["full"]
     google_day = (weekday_idx + 1) % 7  # Google API: 0 is Sun, 1 is Mon...
 
-    reg_hours = restaurant.get("regularOpeningHours") or restaurant.get("regular_opening_hours") or {}
+    reg_hours = place.get("regularOpeningHours") or place.get("regular_opening_hours") or {}
     periods = reg_hours.get("periods") if isinstance(reg_hours, dict) else []
 
     # 2. Check structured periods if available
@@ -324,7 +324,7 @@ def check_restaurant_open_status(
     weekday_desc = (
         reg_hours.get("weekdayDescriptions")
         if isinstance(reg_hours, dict)
-        else restaurant.get("rawOpeningHours")
+        else place.get("rawOpeningHours")
     )
     if isinstance(weekday_desc, list) and weekday_desc:
         for line in weekday_desc:
@@ -353,7 +353,7 @@ def check_restaurant_open_status(
                 return True, "正常营业"
 
     # 4. Check formatted openingHours summary string (e.g. "11:30 AM – 8:00 PM (Mon Closed)")
-    summary_str = str(restaurant.get("openingHours") or "").strip()
+    summary_str = str(place.get("openingHours") or "").strip()
     if summary_str and summary_str != "Not provided":
         sum_lower = summary_str.lower()
         # Direct closed keyword for target day

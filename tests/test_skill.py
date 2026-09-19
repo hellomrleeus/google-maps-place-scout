@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Unit and regression tests for Daily Restaurant Lead Scout Skill.
+Unit and regression tests for Google Maps Place Scout Skill.
 Tests:
 1. Filter logic (contracted & visited exclusion)
 2. Directional corridor projection & anti-shuttle slice sweep
 3. Full 30-stop slash-concatenated Google Maps URL generation
 4. Simplified weekday opening hours algorithm (English format)
-5. 5-column spreadsheet export structure
+5. 7-column spreadsheet export structure
 """
 
 import os
@@ -18,14 +18,13 @@ SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 SCRIPTS_DIR = os.path.join(SKILL_DIR, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
-from filters import RestaurantFilter, normalize_phone, semantic_entity_match
+from filters import PlaceFilter, normalize_phone, semantic_entity_match
 from opening_hours import format_weekday_opening_hours
 from directional_router import DirectionalRouter, project_to_corridor, get_bearing_unit_vector, generate_radial_probe_points, two_opt_tour, haversine_distance_km
 from route_generator import RouteGenerator, build_google_maps_slash_url
-from sheet_exporter import SheetExporter, EXPORT_HEADERS, map_stop_to_5_columns, diagnose_error
+from sheet_exporter import SheetExporter, UNIVERSAL_HEADERS, map_stop_to_columns, diagnose_error
 from config_manager import extract_spreadsheet_id, get_temp_dir, get_user_cache_dir, load_effective_config, resolve_origin_input
 from exclusion_loader import normalize_raw_record, load_exclusion_source
-from filters import semantic_entity_match
 
 class TestOpeningHours(unittest.TestCase):
     def test_all_same_weekday(self):
@@ -108,7 +107,7 @@ class TestOpeningHours(unittest.TestCase):
         result = format_weekday_opening_hours(hours)
         self.assertEqual(result, "11:30 AM – 9:30 PM (Mon, Tue Closed, Fri: 11:30 AM – 10:30 PM)")
 
-class TestRestaurantFilter(unittest.TestCase):
+class TestPlaceFilter(unittest.TestCase):
     def setUp(self):
         import tempfile
         import json
@@ -123,7 +122,7 @@ class TestRestaurantFilter(unittest.TestCase):
             json.dump([
                 {"placeId": "ChIJc7Wn-MockVisited001", "name": "Wohebaobei Postpartum Meals", "phone": "4165559999"}
             ], f)
-        self.filter = RestaurantFilter(self.contracted_file, self.visited_file)
+        self.filter = PlaceFilter(self.contracted_file, self.visited_file)
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -146,7 +145,7 @@ class TestRestaurantFilter(unittest.TestCase):
         self.assertTrue(is_v)
 
     def test_empty_exclusion_sources_allow_all(self):
-        empty_filter = RestaurantFilter(contracted_path=None, visited_path=None)
+        empty_filter = PlaceFilter(contracted_path=None, visited_path=None)
         mock_cand = {
             "placeId": "ChIJanyRandomPlaceId",
             "name": "Kate & Jan Hotdogs",
@@ -216,50 +215,50 @@ class TestSlashUrlAnd5Columns(unittest.TestCase):
         self.assertEqual(url.count("Main%20St"), 30)
 
     def test_7_column_schema(self):
-        self.assertEqual(EXPORT_HEADERS, [
+        self.assertEqual(UNIVERSAL_HEADERS, [
             "No.",
-            "Restaurant Name",
+            "Place Name",
             "Address",
             "Navigation Address",
             "Opening Hours",
             "Phone",
-            "Fried Food Evidence"
+            "Match Evidence"
         ])
         stop = {
-            "name": "KFC",
+            "name": "Pilot Coffee Roasters",
             "address": "123 Yonge St, Toronto, ON",
             "openingHours": "Monday: 11:00 AM – 10:00 PM\nTuesday: 11:00 AM – 10:00 PM\nWednesday: 11:00 AM – 10:00 PM\nThursday: 11:00 AM – 10:00 PM\nFriday: 11:00 AM – 10:00 PM",
             "phone": "416-555-0199",
-            "_audit_rationale": "检测到油炸菜品: fried chicken, french fries"
+            "_audit_rationale": "Jev 决策: Specialty Roaster"
         }
-        row = map_stop_to_5_columns(stop, 0)
+        row = map_stop_to_columns(stop, 0)
         self.assertEqual(len(row), 7)
         self.assertEqual(row[0], 1)
-        self.assertEqual(row[1], "KFC")
+        self.assertEqual(row[1], "Pilot Coffee Roasters")
         self.assertEqual(row[2], "123 Yonge St, Toronto, ON")
         self.assertEqual(row[3], "123 Yonge St, Toronto, ON, Canada")
         self.assertEqual(row[4], "11:00 AM – 10:00 PM")
         self.assertEqual(row[5], "416-555-0199")
-        self.assertEqual(row[6], "Detected fried items: fried chicken, french fries")
+        self.assertEqual(row[6], "Jev decision: Specialty Roaster")
 
     def test_7_column_schema_with_chinese_inputs(self):
         stop = {
-            "name": "Korean BBQ & Wings",
+            "name": "Artisan Coffee & Roastery",
             "address": "加拿大安大略省万锦市 100 Enterprise Blvd",
             "rawOpeningHours": "周一: 休息\n周二: 上午11:30至晚上10:00\n周三: 上午11:30至晚上10:00\n周四: 上午11:30至晚上10:00\n周五: 上午11:30至晚上11:00",
             "phone": "905-555-0123",
-            "_audit_rationale": "特色韩式炸鸡",
-            "_fried_dishes": ["炸鸡", "薯条"]
+            "_audit_rationale": "Jev 决策: 高概率匹配",
+            "_matched_features": ["pour-over", "espresso"]
         }
-        row = map_stop_to_5_columns(stop, 0)
+        row = map_stop_to_columns(stop, 0)
         self.assertEqual(len(row), 7)
         self.assertEqual(row[0], 1)
-        self.assertEqual(row[1], "Korean BBQ & Wings")
+        self.assertEqual(row[1], "Artisan Coffee & Roastery")
         self.assertEqual(row[2], "Canada ON Markham 100 Enterprise Blvd")
         self.assertEqual(row[3], "Canada ON Markham 100 Enterprise Blvd")
         self.assertEqual(row[4], "11:30 AM – 10:00 PM (Mon Closed, Fri: 11:30 AM – 11:00 PM)")
         self.assertEqual(row[5], "905-555-0123")
-        self.assertEqual(row[6], "Specialty Korean Fried Chicken")
+        self.assertEqual(row[6], "Jev decision: High probability (pour-over, espresso)")
 
     def test_export_markdown_summary(self):
         import tempfile
@@ -283,8 +282,8 @@ class TestSlashUrlAnd5Columns(unittest.TestCase):
                 content = f.read()
             self.assertIn("The Fry", content)
             self.assertIn("https://www.google.com/maps/dir/Fairview/TheFry/", content)
-            self.assertIn("| No. | Restaurant Name | Address | Navigation Address |", content)
-            self.assertIn("Fried Food Evidence", content)
+            self.assertIn("| No. | Place Name | Address | Navigation Address |", content)
+            self.assertIn("Match Evidence", content)
 
     def test_export_excel_url_cell_has_no_prefix(self):
         import tempfile
@@ -293,7 +292,7 @@ class TestSlashUrlAnd5Columns(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             exporter = SheetExporter(output_dir=td)
             stops = [
-                {"name": "The Fry", "address": "4864 Yonge St", "openingHours": "12:00 PM – 2:00 AM", "phone": "416-546-6159", "_audit_rationale": "特色韩式炸鸡"}
+                {"name": "Pilot Coffee", "address": "4864 Yonge St", "openingHours": "12:00 PM – 2:00 AM", "phone": "416-546-6159", "_audit_rationale": "Specialty Roaster"}
             ]
             test_url = "https://www.google.com/maps/dir/Fairview/TheFry/"
             excel_path = exporter.export_excel(stops, "test_route.xlsx", master_nav_url=test_url)
@@ -311,8 +310,8 @@ class TestSlashUrlAnd5Columns(unittest.TestCase):
             # Check 4th column header is Navigation Address
             self.assertEqual(ws["D4"].value, "Navigation Address")
             # Check 7th column header and value
-            self.assertEqual(ws["G4"].value, "Fried Food Evidence")
-            self.assertEqual(ws["G5"].value, "Specialty Korean Fried Chicken")
+            self.assertEqual(ws["G4"].value, "Match Evidence")
+            self.assertEqual(ws["G5"].value, "Specialty Roaster")
 
     def test_canonicalize_navigation_address_strips_mall_units(self):
         from sheet_exporter import canonicalize_navigation_address
@@ -385,10 +384,10 @@ class TestSlashUrlAnd5Columns(unittest.TestCase):
 class TestAgentAuditManager(unittest.TestCase):
     def test_export_and_import_decisions(self):
         import tempfile
-        from fried_model_auditor import AgentAuditManager
-        test_audit_dir = os.path.join(tempfile.gettempdir(), "test_lead_scout_audit")
+        from place_auditor import PlaceAuditManager
+        test_audit_dir = os.path.join(tempfile.gettempdir(), "test_place_scout_audit")
         os.makedirs(test_audit_dir, exist_ok=True)
-        mgr = AgentAuditManager(test_audit_dir)
+        mgr = PlaceAuditManager(test_audit_dir)
 
         sample = [{
             "placeId": "TEST_PID_01",
@@ -396,7 +395,7 @@ class TestAgentAuditManager(unittest.TestCase):
             "primaryType": "restaurant",
             "address": "123 Test St",
             "photo_urls": ["http://example.com/photo.jpg"],
-            "editorialSummary": "Serves fried chicken tenders and french fries."
+            "editorialSummary": "Serves fresh food."
         }]
 
         exported_path = mgr.export_pending_audit(sample)
@@ -405,15 +404,15 @@ class TestAgentAuditManager(unittest.TestCase):
         # Test agent decision override
         mgr.agent_decisions["TEST_PID_01"] = {
             "placeId": "TEST_PID_01",
-            "is_fried": True,
-            "dishes": ["chicken tenders", "french fries"],
+            "is_match": True,
+            "features": ["chicken tenders", "french fries"],
             "notes": "Verified by agent multimodal inspection"
         }
 
-        is_fried, conf, dishes, rationale = mgr.audit_restaurant(sample[0])
-        self.assertTrue(is_fried)
+        is_match, conf, features, rationale = mgr.audit_place(sample[0])
+        self.assertTrue(is_match)
         self.assertEqual(conf, 1.0)
-        self.assertIn("chicken tenders", dishes)
+        self.assertIn("chicken tenders", features)
 
 class TestConfigAndTempDir(unittest.TestCase):
     def test_extract_spreadsheet_id_full_url(self):
@@ -435,16 +434,16 @@ class TestConfigAndTempDir(unittest.TestCase):
     def test_temp_and_cache_directories(self):
         tmp = get_temp_dir("audit")
         self.assertTrue(os.path.exists(tmp))
-        self.assertIn("restaurant_lead_scout", tmp)
+        self.assertIn("place_scout", tmp)
 
         cache = get_user_cache_dir("routes")
         self.assertTrue(os.path.exists(cache))
 
     def test_agent_auditor_default_temp_dir(self):
-        from fried_model_auditor import AgentAuditManager
-        mgr = AgentAuditManager()
+        from place_auditor import PlaceAuditManager
+        mgr = PlaceAuditManager()
         self.assertTrue(os.path.exists(mgr.audit_dir))
-        self.assertIn("restaurant_lead_scout", mgr.audit_dir)
+        self.assertIn("place_scout", mgr.audit_dir)
 
 class TestExclusionLoaderAndEntityResolution(unittest.TestCase):
     def test_schema_normalizer_chinese_and_english(self):
@@ -565,11 +564,11 @@ class TestGoogleSheetWebhookSync(unittest.TestCase):
             exporter = SheetExporter(output_dir=tmpdir)
             stops = [
                 {
-                    "name": "Test Fryer",
+                    "name": "Artisan Roaster",
                     "address": "123 Main St, Toronto, ON",
                     "rawOpeningHours": "11:00 AM – 10:00 PM",
                     "phone": "(416) 123-4567",
-                    "_audit_rationale": "检测到油炸菜品: Wings"
+                    "_audit_rationale": "Specialty Espresso Bar"
                 }
             ]
             mock_resp = MagicMock()
@@ -591,9 +590,9 @@ class TestGoogleSheetWebhookSync(unittest.TestCase):
                 payload = json.loads(req.data.decode("utf-8"))
                 self.assertEqual(len(payload["headers"]), 7)
                 self.assertEqual(payload["headers"][3], "Navigation Address")
-                self.assertEqual(payload["headers"][6], "Fried Food Evidence")
-                self.assertEqual(payload["rows"][0][1], "Test Fryer")
-                self.assertEqual(payload["rows"][0][6], "Detected fried items: Wings")
+                self.assertEqual(payload["headers"][6], "Match Evidence")
+                self.assertEqual(payload["rows"][0][1], "Artisan Roaster")
+                self.assertEqual(payload["rows"][0][6], "Specialty Espresso Bar")
 
     def test_sync_to_google_sheet_carries_explicit_sheet_name(self):
         import json
@@ -669,7 +668,7 @@ class TestOriginResolutionAndGeofencing(unittest.TestCase):
         self.assertAlmostEqual(res["longitude"], -79.4111, places=4)
 
     def test_geofencing_exclude_regions(self):
-        r_filter = RestaurantFilter(exclude_regions=["scarborough", "downtown"])
+        r_filter = PlaceFilter(exclude_regions=["scarborough", "downtown"])
         cand_in_scarborough = {
             "name": "Popeyes Louisiana Kitchen",
             "address": "85 Ellesmere Rd Unit H, Scarborough, ON M1R 4C1 Canada",
@@ -688,7 +687,7 @@ class TestOriginResolutionAndGeofencing(unittest.TestCase):
         self.assertFalse(is_ex2)
 
     def test_geofencing_include_regions(self):
-        r_filter = RestaurantFilter(include_regions=["markham"])
+        r_filter = PlaceFilter(include_regions=["markham"])
         cand_markham = {"name": "Test A", "address": "123 Highway 7, Markham, ON"}
         cand_downtown = {"name": "Test B", "address": "100 Queen St W, Toronto, ON"}
 
@@ -715,9 +714,9 @@ class TestOriginResolutionAndGeofencing(unittest.TestCase):
         names = [r["name"] for r in radial_route]
         self.assertNotIn("Stop Far Away", names)
 
-class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
-    def test_adhoc_restaurant_exclusion(self):
-        r_filter = RestaurantFilter(exclude_restaurants=["popeyes", "kfc"])
+class TestAdHocPlaceExclusionAndPinning(unittest.TestCase):
+    def test_adhoc_place_exclusion(self):
+        r_filter = PlaceFilter(exclude_places=["popeyes", "kfc"])
         cand1 = {"name": "Popeyes Louisiana Kitchen", "placeId": "ChIJ1"}
         cand2 = {"name": "bb.q Chicken Don Mills", "placeId": "ChIJ2"}
 
@@ -728,7 +727,7 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
         self.assertIn("popeyes", reason1)
         self.assertFalse(is_ex2)
 
-    def test_mandatory_restaurant_pinning_overrides_crm(self):
+    def test_mandatory_place_pinning_overrides_crm(self):
         import tempfile
         import json
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -737,16 +736,16 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
             ], f)
             tmp_path = f.name
         try:
-            r_filter = RestaurantFilter(
+            r_filter = PlaceFilter(
                 contracted_path=tmp_path,
-                mandatory_restaurants=["kate & jan hotdogs"]
+                mandatory_places=["kate & jan hotdogs"]
             )
             cand = {
                 "name": "Kate & Jan Hotdogs",
                 "placeId": "ChIJ4csnNTPV1IkRanjeCREz1WY",
                 "phone": "9055550101"
             }
-            accepted, stats = r_filter.filter_restaurants([cand])
+            accepted, stats = r_filter.filter_places([cand])
             self.assertEqual(len(accepted), 1)
             self.assertTrue(accepted[0].get("_is_pinned"))
             self.assertEqual(stats["mandatory_count"], 1)
@@ -775,23 +774,23 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
         names = [r["name"] for r in route]
         self.assertIn("Must Visit Pinned Stop", names)
 
-    def test_check_restaurant_business_status_closed(self):
-        from opening_hours import check_restaurant_open_status
+    def test_check_place_business_status_closed(self):
+        from opening_hours import check_place_open_status
         cand_perm = {"name": "Old Joint", "business_status": "CLOSED_PERMANENTLY"}
-        is_open, reason = check_restaurant_open_status(cand_perm, "2026-09-21")
+        is_open, reason = check_place_open_status(cand_perm, "2026-09-21")
         self.assertFalse(is_open)
         self.assertIn("CLOSED_PERMANENTLY", reason)
 
         cand_temp = {"name": "Renovating Joint", "businessStatus": "CLOSED_TEMPORARILY"}
-        is_open, reason = check_restaurant_open_status(cand_temp, "2026-09-21")
+        is_open, reason = check_place_open_status(cand_temp, "2026-09-21")
         self.assertFalse(is_open)
         self.assertIn("CLOSED_TEMPORARILY", reason)
 
-    def test_check_restaurant_day_of_week_rest_day(self):
-        from opening_hours import check_restaurant_open_status
+    def test_check_place_day_of_week_rest_day(self):
+        from opening_hours import check_place_open_status
         # 2026-09-21 is Monday, 2026-09-22 is Tuesday
         cand = {
-            "name": "Monday Off Chicken",
+            "name": "Monday Off Store",
             "openingHours": "11:30 AM – 9:00 PM (Mon Closed)",
             "regularOpeningHours": {
                 "weekdayDescriptions": [
@@ -802,18 +801,18 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
             }
         }
         # Monday visit: should be excluded
-        is_open_mon, reason_mon = check_restaurant_open_status(cand, visit_date_str="2026-09-21")
+        is_open_mon, reason_mon = check_place_open_status(cand, visit_date_str="2026-09-21")
         self.assertFalse(is_open_mon)
         self.assertIn("Closed", reason_mon)
 
         # Tuesday visit: should be accepted
-        is_open_tue, _ = check_restaurant_open_status(cand, visit_date_str="2026-09-22")
+        is_open_tue, _ = check_place_open_status(cand, visit_date_str="2026-09-22")
         self.assertTrue(is_open_tue)
 
-    def test_check_restaurant_dinner_only_late_opening(self):
-        from opening_hours import check_restaurant_open_status
+    def test_check_place_dinner_only_late_opening(self):
+        from opening_hours import check_place_open_status
         cand_bar = {
-            "name": "Night Pub & Wings",
+            "name": "Night Lounge",
             "openingHours": "5:30 PM – 3:00 AM",
             "regularOpeningHours": {
                 "weekdayDescriptions": [
@@ -821,20 +820,20 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
                 ]
             }
         }
-        # Default daytime sales run: exclude dinner only
-        is_open, reason = check_restaurant_open_status(cand_bar, "2026-09-21", allow_dinner_only=False)
+        # Default daytime run: exclude dinner only
+        is_open, reason = check_place_open_status(cand_bar, "2026-09-21", allow_dinner_only=False)
         self.assertFalse(is_open)
         self.assertIn("仅晚间夜宵营业", reason)
 
         # Evening run: permit dinner only
-        is_open_allowed, _ = check_restaurant_open_status(cand_bar, "2026-09-21", allow_dinner_only=True)
+        is_open_allowed, _ = check_place_open_status(cand_bar, "2026-09-21", allow_dinner_only=True)
         self.assertTrue(is_open_allowed)
 
-    def test_filter_restaurants_excludes_closed_and_preserves_pinned(self):
-        r_filter = RestaurantFilter(
+    def test_filter_places_excludes_closed_and_preserves_pinned(self):
+        r_filter = PlaceFilter(
             visit_date="2026-09-21", # Monday
             filter_closed=True,
-            mandatory_restaurants=["pinned closed restaurant"]
+            mandatory_places=["pinned closed place"]
         )
         candidates = [
             {
@@ -843,7 +842,7 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
                 "placeId": "p_closed"
             },
             {
-                "name": "Pinned Closed Restaurant",
+                "name": "Pinned Closed Place",
                 "openingHours": "11:00 AM – 9:00 PM (Mon Closed)",
                 "placeId": "p_pinned"
             },
@@ -853,7 +852,7 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
                 "placeId": "p_open"
             }
         ]
-        accepted, stats = r_filter.filter_restaurants(candidates)
+        accepted, stats = r_filter.filter_places(candidates)
         accepted_pids = [r["placeId"] for r in accepted]
         self.assertNotIn("p_closed", accepted_pids)
         self.assertIn("p_open", accepted_pids)
@@ -894,7 +893,7 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
         searcher_no_key = PlacesSearcher(api_key="")
         self.assertFalse(searcher_no_key.is_live_api_ready())
         with self.assertRaises(RuntimeError):
-            searcher_no_key.search_corridor_probes([(43.7764, -79.2318)], keywords=["fried chicken"])
+            searcher_no_key.search_corridor_probes([(43.7764, -79.2318)], keywords=["cafe"])
 
         # 2. Verification: with API key and standard HTTP response, correctly parses places
         searcher = PlacesSearcher(api_key="AIzaSy_TEST_KEY")
@@ -904,13 +903,13 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
             "places": [
                 {
                     "id": "ChIJ_TEST_01",
-                    "displayName": {"text": "Golden Fried Chicken"},
+                    "displayName": {"text": "Artisan Coffee Roasters"},
                     "formattedAddress": "123 Finch Ave E, Toronto, ON M2N 4R7, Canada",
                     "nationalPhoneNumber": "(416) 123-4567",
                     "location": {"latitude": 43.7780, "longitude": -79.4100},
                     "rating": 4.5,
                     "userRatingCount": 120,
-                    "primaryType": "chicken_restaurant",
+                    "primaryType": "cafe",
                     "businessStatus": "OPERATIONAL",
                     "regularOpeningHours": {
                         "weekdayDescriptions": [
@@ -932,9 +931,9 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
         mock_resp.__enter__.return_value = mock_resp
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            results = searcher.search_corridor_probes([(43.7764, -79.2318)], keywords=["fried chicken"])
+            results = searcher.search_corridor_probes([(43.7764, -79.2318)], keywords=["cafe"])
             self.assertEqual(len(results), 1)
-            self.assertEqual(results[0]["name"], "Golden Fried Chicken")
+            self.assertEqual(results[0]["name"], "Artisan Coffee Roasters")
             self.assertEqual(results[0]["placeId"], "ChIJ_TEST_01")
             self.assertEqual(results[0]["phone"], "(416) 123-4567")
 
@@ -1124,114 +1123,114 @@ class TestJevIntegration(unittest.TestCase):
         is_match, conf, rationale, matched_ref = semantic_entity_match(cand, ref_list, jev_client=MockChainBranchJev())
         self.assertFalse(is_match)
 
-    def test_mock_jev_fried_food_audit(self):
-        from fried_model_auditor import AgentAuditManager
+    def test_mock_jev_place_audit(self):
+        from place_auditor import PlaceAuditManager
+        from jev_client import JevMatchResult
 
-        class MockFriedJev:
+        class MockPlaceJev:
             def is_ready(self):
                 return True
-            def evaluate_fried_food(self, place):
-                return True, 0.92, ["炸鸡/鸡翅 (Fried Chicken/Wings)"], "Jev 确定为炸鸡专营店"
+            def evaluate_place(self, place, criteria="", template="general"):
+                return JevMatchResult(True, 0.92, ["Specialty Coffee Roaster"], "Jev confirmed specialty roaster", tier_status="DEFINITIVE_PASS")
 
-        mgr = AgentAuditManager(jev_client=MockFriedJev())
+        mgr = PlaceAuditManager(jev_client=MockPlaceJev(), template="coffee")
         place = {
             "id": "mock_p1",
-            "name": "Super Hot Wings",
-            "primaryType": "chicken_restaurant",
-            "categories": ["restaurant"],
-            "editorialSummary": "Known for crisp wings and fries."
+            "name": "Artisan Roasters",
+            "primaryType": "cafe",
+            "categories": ["coffee_shop"],
+            "editorialSummary": "Craft espresso and single origin pour overs."
         }
-        is_fried, conf, dishes, rat = mgr.audit_restaurant(place)
-        self.assertTrue(is_fried)
+        is_match, conf, features, rat = mgr.audit_place(place)
+        self.assertTrue(is_match)
         self.assertGreaterEqual(conf, 0.9)
         self.assertIn("Jev", rat)
 
     def test_graceful_fallback_when_jev_offline(self):
-        from fried_model_auditor import AgentAuditManager
+        from place_auditor import PlaceAuditManager
 
         class MockFailingJev:
             def is_ready(self):
                 return True
-            def evaluate_fried_food(self, place):
-                return None  # simulates HTTP failure
+            def evaluate_place(self, place, criteria="", template="general"):
+                return None
 
-        mgr = AgentAuditManager(jev_client=MockFailingJev())
+        mgr = PlaceAuditManager(jev_client=MockFailingJev(), keywords=["espresso", "coffee"])
         place = {
             "id": "mock_p2",
-            "name": "Golden Fish and Chips",
-            "primaryType": "seafood_restaurant",
-            "editorialSummary": "Serving fresh halibut and chips daily."
+            "name": "Golden Espresso Bar",
+            "primaryType": "cafe",
+            "editorialSummary": "Serving fresh espresso and craft coffee daily."
         }
-        # Falls back to local regex heuristic and still succeeds
-        is_fried, conf, dishes, rat = mgr.audit_restaurant(place)
-        self.assertTrue(is_fried)
-        self.assertIn("fish and chips", dishes)
+        # Falls back to local keyword heuristic and still succeeds
+        is_match, conf, features, rat = mgr.audit_place(place)
+        self.assertTrue(is_match)
+        self.assertIn("espresso", features)
 
     def test_jev_tier_classification(self):
-        from jev_client import classify_jev_tier, JevFriedResult
+        from jev_client import classify_jev_tier, JevMatchResult
 
         # High confidence positive -> DEFINITIVE_PASS
-        tier1 = classify_jev_tier(0.92, "fried_chicken", 2)
+        tier1 = classify_jev_tier(0.92, "specialty_roaster", 2)
         self.assertEqual(tier1, "DEFINITIVE_PASS")
 
         # Low confidence negative -> DEFINITIVE_REJECT
-        tier2 = classify_jev_tier(0.15, "non_fried", 0)
+        tier2 = classify_jev_tier(0.15, "unrelated", 0)
         self.assertEqual(tier2, "DEFINITIVE_REJECT")
 
         # Ambiguous / Borderline -> NEED_MULTIMODAL_INSPECTION
-        tier3 = classify_jev_tier(0.55, "asian_fried", 1)
+        tier3 = classify_jev_tier(0.55, "general_provider", 1)
         self.assertEqual(tier3, "NEED_MULTIMODAL_INSPECTION")
 
-        # Test JevFriedResult backward compatibility
-        res = JevFriedResult(True, 0.92, ["Fried Chicken"], "High confidence", tier_status=tier1)
-        # Unpacks as 4 elements
-        is_f, c, d, r = res
-        self.assertTrue(is_f)
+        # Test JevMatchResult
+        res = JevMatchResult(True, 0.92, ["Specialty Coffee"], "High confidence", tier_status=tier1)
+        is_m, c, feats, r = res
+        self.assertTrue(is_m)
         self.assertEqual(c, 0.92)
         self.assertEqual(res.tier_status, "DEFINITIVE_PASS")
 
     def test_agent_native_export_pending_audit_only_ambiguous(self):
         import tempfile
-        from fried_model_auditor import AgentAuditManager
-        from jev_client import JevFriedResult
+        from place_auditor import PlaceAuditManager
+        from jev_client import JevMatchResult
 
         temp_dir = tempfile.mkdtemp()
 
         class MockTieredJev:
             def is_ready(self):
                 return True
-            def evaluate_fried_food(self, place):
-                if "popeyes" in place.get("name", "").lower():
-                    return JevFriedResult(True, 0.98, ["Fried Chicken"], "Clear pass", tier_status="DEFINITIVE_PASS")
-                elif "juice" in place.get("name", "").lower():
-                    return JevFriedResult(False, 0.10, ["Non-fried"], "Clear reject", tier_status="DEFINITIVE_REJECT")
+            def evaluate_place(self, place, criteria="", template="general"):
+                if "roaster" in place.get("name", "").lower():
+                    return JevMatchResult(True, 0.98, ["Specialty Coffee"], "Clear pass", tier_status="DEFINITIVE_PASS")
+                elif "gas" in place.get("name", "").lower():
+                    return JevMatchResult(False, 0.10, ["Unrelated"], "Clear reject", tier_status="DEFINITIVE_REJECT")
                 else:
-                    return JevFriedResult(True, 0.55, ["Asian Fried"], "Ambiguous", tier_status="NEED_MULTIMODAL_INSPECTION")
+                    return JevMatchResult(True, 0.55, ["Craft Cafe"], "Ambiguous", tier_status="NEED_MULTIMODAL_INSPECTION")
 
-        mgr = AgentAuditManager(audit_dir=temp_dir, jev_client=MockTieredJev())
+        mgr = PlaceAuditManager(audit_dir=temp_dir, jev_client=MockTieredJev())
 
         candidates = [
-            {"id": "p1", "placeId": "p1", "name": "Popeyes", "primaryType": "fast_food_restaurant"},
-            {"id": "p2", "placeId": "p2", "name": "Fresh Juice Bar", "primaryType": "juice_shop"},
-            {"id": "p3", "placeId": "p3", "name": "Kyoto Izakaya", "primaryType": "japanese_restaurant", "photo_urls": []}
+            {"id": "p1", "placeId": "p1", "name": "Pilot Coffee Roasters", "primaryType": "cafe"},
+            {"id": "p2", "placeId": "p2", "name": "Shell Gas Station", "primaryType": "gas_station"},
+            {"id": "p3", "placeId": "p3", "name": "Neighborhood Corner Shop", "primaryType": "store", "photo_urls": []}
         ]
 
         pending_file = mgr.export_pending_audit(candidates, download_images=False)
         ambiguous = mgr.ambiguous_candidates
-        # Only Kyoto Izakaya should be exported to pending_agent_audit.json!
+        # Only Corner Shop should be exported to pending_agent_audit.json!
         self.assertEqual(len(ambiguous), 1)
         self.assertEqual(ambiguous[0]["placeId"], "p3")
-        self.assertEqual(ambiguous[0]["name"], "Kyoto Izakaya")
+        self.assertEqual(ambiguous[0]["name"], "Neighborhood Corner Shop")
 
-        # Verify Popeyes passes directly and Juice Bar is rejected
-        is_f1, _, _, _ = mgr.audit_restaurant(candidates[0])
-        self.assertTrue(is_f1)
-        is_f2, _, _, _ = mgr.audit_restaurant(candidates[1])
-        self.assertFalse(is_f2)
+        # Verify Pilot passes directly and Gas Station is rejected
+        is_m1, _, _, _ = mgr.audit_place(candidates[0])
+        self.assertTrue(is_m1)
+        is_m2, _, _, _ = mgr.audit_place(candidates[1])
+        self.assertFalse(is_m2)
 
     def test_agent_multimodal_decision_priority(self):
         import tempfile, json
-        from fried_model_auditor import AgentAuditManager
+        from place_auditor import PlaceAuditManager
 
         temp_dir = tempfile.mkdtemp()
         results_file = os.path.join(temp_dir, "agent_audit_results.json")
@@ -1239,24 +1238,24 @@ class TestJevIntegration(unittest.TestCase):
         with open(results_file, "w", encoding="utf-8") as f:
             json.dump([
                 {
-                    "placeId": "izakaya_99",
-                    "is_fried": True,
-                    "fried_dishes": ["tempura", "karaage"],
-                    "rationale": "Verified by Agent multimodal image inspection: visible fry basket"
+                    "placeId": "shop_99",
+                    "is_match": True,
+                    "features": ["craft espresso", "roastery"],
+                    "rationale": "Verified by Agent multimodal image inspection: visible espresso bar"
                 }
             ], f)
 
-        mgr = AgentAuditManager(audit_dir=temp_dir)
+        mgr = PlaceAuditManager(audit_dir=temp_dir)
         candidate = {
-            "id": "izakaya_99",
-            "name": "Izakaya 99",
-            "primaryType": "japanese_restaurant"
+            "id": "shop_99",
+            "name": "Shop 99",
+            "primaryType": "cafe"
         }
 
-        is_f, conf, dishes, rat = mgr.audit_restaurant(candidate)
-        self.assertTrue(is_f)
+        is_m, conf, feats, rat = mgr.audit_place(candidate)
+        self.assertTrue(is_m)
         self.assertEqual(conf, 1.0)
-        self.assertIn("tempura", dishes)
+        self.assertIn("craft espresso", feats)
         self.assertIn("Verified by Agent multimodal", rat)
         self.assertEqual(mgr.stats["agent_cached"], 1)
 
@@ -1279,32 +1278,23 @@ class TestDecoupledSearchAndBugFixes(unittest.TestCase):
         # When no active Google API key, it falls back to raw place query name instead of Markham city center
         self.assertNotEqual(res_specific["name"], "Markham")
 
-    def test_places_searcher_probe_query_suffix_deduplication(self):
+    def test_places_searcher_probe_query_clean(self):
         from places_searcher import PlacesSearcher
         searcher = PlacesSearcher(api_key="TEST_MOCK_KEY")
-        # Ensure query suffix logic avoids repetition
-        kw_restaurant = "asian restaurant"
-        kw_clean = kw_restaurant.strip()
-        kw_lower = kw_clean.lower()
-        has_suffix = any(term in kw_lower for term in ["restaurant", "food", "court", "dining", "kitchen", "cafe", "bakery", "eatery", "bar"])
-        query = kw_clean if has_suffix else f"{kw_clean} restaurant"
-        self.assertEqual(query, "asian restaurant")
-
-        kw_plain = "fried chicken"
-        kw_clean = kw_plain.strip()
-        kw_lower = kw_clean.lower()
-        has_suffix = any(term in kw_lower for term in ["restaurant", "food", "court", "dining", "kitchen", "cafe", "bakery", "eatery", "bar"])
-        query = kw_clean if has_suffix else f"{kw_clean} restaurant"
-        self.assertEqual(query, "fried chicken restaurant")
+        # Ensure queries are passed cleanly as-is without biased suffixes
+        kw_clean = "asian restaurant".strip()
+        self.assertEqual(kw_clean, "asian restaurant")
+        kw_cafe = "coffee roastery".strip()
+        self.assertEqual(kw_cafe, "coffee roastery")
 
 class TestUniversalPlaceScout(unittest.TestCase):
     def test_build_criteria_spec_presets_and_custom(self):
         from jev_client import build_criteria_spec
 
-        # Test fried_food preset
-        spec_fried = build_criteria_spec(template="fried_food")
-        self.assertEqual(spec_fried["decision_field"], "has_commercial_fryer")
-        self.assertIn("fryer", spec_fried["system_prompt"].lower())
+        # Test dining preset
+        spec_dining = build_criteria_spec(template="dining")
+        self.assertEqual(spec_dining["decision_field"], "matches_culinary_criteria")
+        self.assertIn("dining", spec_dining["system_prompt"].lower())
 
         # Test coffee preset
         spec_coffee = build_criteria_spec(template="coffee")
@@ -1353,7 +1343,6 @@ class TestUniversalPlaceScout(unittest.TestCase):
         cafe = {"id": "c1", "name": "Artisan Coffee Roasters", "primaryType": "cafe"}
         res = client.evaluate_place(cafe, template="coffee")
         self.assertTrue(res.is_match)
-        self.assertTrue(res.is_fried)  # Backward compat alias
         self.assertEqual(res.confidence, 0.95)
         self.assertIn("Pour-over bar", res.features)
         self.assertEqual(res.tier_status, "DEFINITIVE_PASS")
@@ -1457,15 +1446,13 @@ class TestUniversalPlaceScout(unittest.TestCase):
         self.assertIn("New%20York", master_url)
 
     def test_sheet_exporter_universal_headers(self):
-        from sheet_exporter import SheetExporter, EXPORT_HEADERS, UNIVERSAL_HEADERS
+        from sheet_exporter import SheetExporter, UNIVERSAL_HEADERS
 
-        # Default fried_food template retains EXPORT_HEADERS for backward compatibility
-        exporter_fried = SheetExporter()
-        self.assertEqual(exporter_fried.headers, EXPORT_HEADERS)
-        self.assertEqual(exporter_fried.headers[1], "Restaurant Name")
-        self.assertEqual(exporter_fried.headers[6], "Fried Food Evidence")
+        exporter = SheetExporter()
+        self.assertEqual(exporter.headers, UNIVERSAL_HEADERS)
+        self.assertEqual(exporter.headers[1], "Place Name")
+        self.assertEqual(exporter.headers[6], "Match Evidence")
 
-        # Non-fried template uses UNIVERSAL_HEADERS
         exporter_coffee = SheetExporter(template="coffee")
         self.assertEqual(exporter_coffee.headers, UNIVERSAL_HEADERS)
         self.assertEqual(exporter_coffee.headers[1], "Place Name")
@@ -1475,10 +1462,10 @@ class TestUniversalPlaceScout(unittest.TestCase):
         self.assertEqual(exporter_custom.headers, ["ID", "Name", "Location"])
 
     def test_heuristic_audit_generic_place(self):
-        from fried_model_auditor import AgentAuditManager
+        from place_auditor import PlaceAuditManager
 
         # Test coffee template auditor
-        coffee_mgr = AgentAuditManager(template="coffee", keywords=["espresso", "latte", "pour-over", "coffee"])
+        coffee_mgr = PlaceAuditManager(template="coffee", keywords=["espresso", "latte", "pour-over", "coffee"])
         cafe_place = {
             "id": "p_coffee",
             "name": "Stumptown Coffee Roasters",
@@ -1500,12 +1487,11 @@ class TestUniversalPlaceScout(unittest.TestCase):
         is_m_neg, conf_neg, feats_neg, _ = coffee_mgr.audit_place(hardware_store)
         self.assertFalse(is_m_neg)
 
-    def test_filter_places_alias(self):
-        from filters import PlaceFilter, RestaurantFilter
+    def test_filter_places(self):
+        from filters import PlaceFilter
 
-        self.assertIs(PlaceFilter, RestaurantFilter)
         pf = PlaceFilter(exclude_places=["Shell", "Esso"])
-        self.assertEqual(pf.exclude_restaurants, ["shell", "esso"])
+        self.assertEqual(pf.exclude_places, ["shell", "esso"])
 
         candidates = [
             {"id": "p1", "name": "Shell Gas Station", "address": "123 Main St"},

@@ -8,15 +8,15 @@
   - Target Search District (Decoupled from Origin): `--search-center "<landmark/coordinates>"`
   - Target Search Radius: `--search-radius <km>` or `--radius <km>`
   - Geofence Bounding Box: `--bounds "<min_lat,min_lng,max_lat,max_lng>"`
-  - Custom Keywords: `--keywords "fried chicken,wings,fast food,ramen"`
+  - Custom Keywords: `--keywords "specialty coffee,espresso,beans"`
   - Target Place Types: `--place-types "restaurant,cafe,gym,car_wash,dentist"`
   - Custom Criteria: `--criteria "has commercial espresso machine"`
-  - Criteria Template: `--template "fried_food|coffee|auto|fitness|general"`
+  - Criteria Template: `--template "coffee|dining|auto|fitness|general"`
   - Radial Search: `--direction radial --radius <km>`
   - Directional Search: `--direction <east|west|north|south|etc.>`
   - Target Count: `--count <N>`
   - Exclude/Include Regions: `--exclude-regions "..."` / `--include-regions "..."`
-  - Specific Locations: `--include-restaurants "..."` / `--exclude-restaurants "..."`
+  - Specific Locations: `--include-places "..."` / `--exclude-places "..."`
 - The agent must act strictly as a tool operator executing commands via CLI, NOT as a code modifier, unless the user explicitly commands: "Modify the skill code to add a new feature".
 
 ## Handling Visual Map Screenshots & Remote Search Centers

@@ -10,17 +10,17 @@ description: Automatically discover candidate public places (restaurants, cafes,
 This skill executes an on-demand or scheduled lead discovery and navigation planning workflow across **any public place types on Google Maps** (restaurants, cafes, auto detailing, fitness centers, dental clinics, retail stores, etc.):
 1. **Global Google Maps Places Search (English)**: Queries target regions globally using Google Maps Places API (New) with `languageCode: "en"` and dynamic `includedType` / keyword probe expansion.
 2. **Contracted & Visited Location Filtering (Multi-Source & Jev Decision Model)**: Ingests exclusion lists from Excel (.xlsx), CSV, JSON, or REST APIs. Employs tiered matching: Tier 1 Hard Match on Place ID / Phone + Tier 2 TypeSafe AI official `jev-latest` typed decision model (noul/choice via `POST https://api.typesafe.ai/v1/systemone`) on brand aliases and store addresses to eliminate contracted and previously visited locations without false exclusions of distinct chain branches.
-3. **Agent Multimodal & Jev Feature Audit**: Leverages TypeSafe AI Jev typed decision models with customizable criteria (`criteria`, `template`: `fried_food`, `coffee`, `auto`, `fitness`, `general`) to audit descriptions, services, and reviews, combined with agent native multimodal vision inspection of storefront and facility photos.
+3. **Agent Multimodal & Jev Feature Audit**: Leverages TypeSafe AI Jev typed decision models with customizable criteria (`criteria`, `template`: `coffee`, `auto`, `fitness`, `dining`, `general`) to audit descriptions, services, and reviews, combined with agent native multimodal vision inspection of storefront and facility photos.
 4. **Anti-Shuttle Corridor Routing**: Slices the directional corridor into depth bins and sweeps local place clusters monotonically forward without back-and-forth oscillation or reversing along the travel axis.
 5. **Sequential 10-Stop Google Maps Navigation Legs & Overview URL**: Because Google Maps natively limits turn-by-turn driving routes to 10 stops (1 Origin + 9 Waypoints), formats the stops into sequential driving legs (Leg 1: 1–9, Leg 2: 9–18, Leg 3: 18–27, Leg 4: 27–30) for reliable 1-click mobile driving, plus a master overview URL for desktop review.
 6. **7-Column English Spreadsheet & Report Export**: Generates normalized, professionally styled Excel (.xlsx) workbook, CSV, and Markdown report with 7 columns (headers and content strictly in pure English):
    - `No.`
-   - `Place Name` (or `Restaurant Name` for fried food)
+   - `Place Name`
    - `Address` (Detailed location address including unit/suite)
    - `Navigation Address` (Deduplicated canonical driving address, vertically merged across multi-merchant complexes/malls)
    - `Opening Hours` (Condensed weekday schedule)
    - `Phone`
-   - `Match Evidence` (or `Fried Food Evidence` for fried food)
+   - `Match Evidence`
 
 ```mermaid
 flowchart LR
@@ -136,13 +136,13 @@ The system automatically senses whether it is running within a project workspace
 - **Mode 1: Project Workspace Mode** (installed under `<project>/.agents/skills/...`, `<project>/.gemini/skills/...`, `<project>/skills/...`, or inside a workspace repository):
   - **Zero pollution to `~`**: All configurations and caches stay 100% self-contained inside the project.
   - **Configuration**: `<project_root>/config.json` (gitignored).
-  - **Temporary audit files**: `<project_root>/.cache/restaurant_lead_scout/audit/` (gitignored).
+  - **Temporary audit files**: `<project_root>/.cache/place_scout/audit/` (gitignored).
   - **Output deliverables**: `<project_root>/output/`.
 - **Mode 2: Global / Root Install Mode** (installed under `~/.gemini/config/skills/...`, `~/.agents/skills/...`, or running without a project):
   - Uses standard XDG directories to protect the user's home folder root:
-  - **Configuration**: `~/.config/restaurant_lead_scout/config.json`
-  - **Cache & Exports**: `~/.cache/restaurant_lead_scout/`
-  - **Temporary audit files**: System temp `/tmp/restaurant_lead_scout/audit/`
+  - **Configuration**: `~/.config/place_scout/config.json`
+  - **Cache & Exports**: `~/.cache/place_scout/`
+  - **Temporary audit files**: System temp `/tmp/place_scout/audit/`
 
 ### Execution Path & Dynamic `<SKILL_DIR>` Resolution (Multi-Agent Compatibility)
 > [!IMPORTANT]
@@ -232,7 +232,7 @@ The skill exclusively synchronizes to Google Sheets via **Google Apps Script Web
          startRow = 2;
        }
 
-       var headers = data.headers || ["No.", "Restaurant Name", "Address", "Opening Hours", "Phone", "Fried Food Evidence"];
+       var headers = data.headers || ["No.", "Place Name", "Address", "Opening Hours", "Phone", "Match Evidence"];
        var headerRange = sheet.getRange(startRow, 1, 1, headers.length);
        headerRange.setValues([headers]);
        headerRange.setBackground("#1A73E8")
@@ -426,18 +426,16 @@ This skill is architected around a **Tripartite Collaboration Framework (人 - �
    `<temp_dir>/audit/photos/<place_id>_0.jpg`
    and indexed in `pending_agent_audit.json`.
 3. **Agent Native Vision Intervention**:
-   The executing AI Agent detects the ambiguous candidates, calls its native `view_file` tool to inspect the downloaded dish and kitchen photos, and evaluates visual cues:
-   - Commercial fryers, wire fry baskets, large oil vats.
-   - Crispy golden breading, tempura, karaage, wings, french fries.
+   The executing AI Agent detects the ambiguous candidates, calls its native `view_file` tool to inspect the downloaded storefront and interior photos, and evaluates visual cues according to the target criteria (e.g., commercial equipment, service bays, specialty facilities, etc.).
 4. **Verdict Ingestion & Priority Locking**:
    The Agent records the verified decisions in `<temp_dir>/audit/agent_audit_results.json`:
    ```json
    [
      {
        "placeId": "ChIJ...",
-       "is_fried": true,
-       "fried_dishes": ["Korean fried chicken", "wings"],
-       "rationale": "Verified by Agent multimodal visual inspection: Storefront and dish photos confirm commercial fryer items"
+       "is_match": true,
+       "matched_features": ["specialty equipment", "dedicated workspace"],
+       "rationale": "Verified by Agent multimodal visual inspection: Storefront and facility photos confirm criteria match"
      }
    ]
    ```
@@ -475,11 +473,11 @@ Summarizes Monday–Friday schedules into concise English strings:
 2. **Master Google Maps 30-Stop Navigation URL**:
    Formatted directly in the terminal and embedded into the spreadsheet header.
 3. **Local Route Backups**:
-   Saved to `output/` (or `~/.cache/restaurant_lead_scout/routes/` when running project-free):
+   Saved to `output/` (or `~/.cache/place_scout/routes/` when running project-free):
    - `route_YYYY-MM-DD_<direction>.xlsx` (7-column professionally styled Excel workbook with vertically merged navigation cells for plazas/malls)
 
 ### Intermediate Files (Temporary)
-- Stored exclusively in system temporary path: `/tmp/restaurant_lead_scout/audit/pending_agent_audit.json`
+- Stored exclusively in system temporary path: `/tmp/place_scout/audit/pending_agent_audit.json`
 - Does not clutter the current working directory.
 
 ---
@@ -497,6 +495,6 @@ Summarizes Monday–Friday schedules into concise English strings:
 >    - **Turn-by-Turn Driving Legs (Primary Navigation)**: Clickable links for the sequential driving legs (e.g. Leg 1: 1–9, Leg 2: 9–10) — strictly conforming to Google Maps' 10-stop limit (1 origin + 9 waypoints) so each leg opens reliably on mobile and desktop without truncation or lookup failures.
 >    - **Master Route Overview**: A clickable desktop overview link: `[Google Maps 路线导航](<master_slash_url>)`.
 >    - **Live Google Sheet**: If enabled, a direct clickable link to the synced cloud spreadsheet.
->    - **Route Schedule Table**: A clean GFM Markdown table of the stops (Index, Restaurant Name, Address, Operating Hours, Phone, Fried Food Evidence / 油炸依据).
+>    - **Route Schedule Table**: A clean GFM Markdown table of the stops (Index, Place Name, Address, Operating Hours, Phone, Match Evidence).
 >    - **Deliverables Links**: Direct clickable link to the exported Excel workbook (`.xlsx`).
 > 4. **NEVER** just say "The command finished successfully" or "Check the terminal logs". Always bring the complete route deliverables directly into the chat dialogue!

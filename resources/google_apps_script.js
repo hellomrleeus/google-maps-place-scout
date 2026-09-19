@@ -1,5 +1,5 @@
 /**
- * Daily Restaurant Lead Scout - Google Sheet Webhook Script
+ * Google Maps Place Scout - Google Sheet Webhook Script
  * 
  * 功能特性：
  * 1. doGet: 当用户在浏览器直接点击 Webhook 链接时，自动跳转到对应的 Google Sheet 在线表格。
@@ -71,7 +71,7 @@ function doPost(e) {
 
     // 2. 写入大地图导航条（超链接）
     var startRow = 1;
-    var headers = data.headers || ["No.", "Restaurant Name", "Address", "Navigation Address", "Opening Hours", "Phone", "Fried Food Evidence"];
+    var headers = data.headers || ["No.", "Place Name", "Address", "Navigation Address", "Opening Hours", "Phone", "Match Evidence"];
     if (data.master_nav_url) {
       sheet.getRange(1, 1).setFormula('=HYPERLINK("' + data.master_nav_url + '", "Google Maps Route Navigation")');
       sheet.getRange(1, 1, 1, headers.length).merge()

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Universal CLI wrapper for Daily Restaurant Lead Scout
+# Universal CLI wrapper for Google Maps Place Scout
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -15,7 +15,7 @@ for candidate in python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
 done
 
 if [ -z "$PYTHON_BIN" ]; then
-    echo "❌ Error: Working python3 interpreter not found." >&2
+    echo "Error: Working python3 interpreter not found." >&2
     exit 1
 fi
 

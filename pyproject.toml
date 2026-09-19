@@ -14,4 +14,3 @@ dependencies = [
 
 [project.scripts]
 place-scout = "scripts.main:main"
-restaurant-scout = "scripts.main:main"

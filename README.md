@@ -10,7 +10,7 @@
 
 1. **零代码交互式安装向导（Zero-Code Setup Wizard）**：
    - 用户首次启动或运行 `--setup` 时，通过终端问答即可完成 Google Maps API Key、Google Sheet 目标链接与默认起点的配置。
-   - 自动保存在系统标准用户目录 `~/.config/restaurant_lead_scout/config.json`，无需手动编辑代码或 JSON 语法。
+   - 自动保存在系统标准用户目录 `~/.config/place_scout/config.json`，无需手动编辑代码或 JSON 语法。
 2. **多源异构数据自适应摄取与智能对齐（Multi-Source Schema Normalizer）**：
    - 支持本地 Excel (`.xlsx`)、CSV、JSON 文件以及企业外部 REST API 接口；
    - 自动容错识别千奇百怪的中英文表头（如“商户名/店名/Shop/Title”自动映射为名称，“手机/电话/Tel”自动映射为电话）。
@@ -21,10 +21,10 @@
    - 全球任意经纬度或地址起步，动态从 Google Places `addressComponents` 提取行政区划与城市（摒弃固定区域锁与强制国别后缀）；
    - 支持 `--place-types` 自由传入 Google Places API (New) 支持的任意类型（如 `cafe`, `gym`, `car_repair`, `car_wash`, `dentist`, `hotel`, `store` 等）。
 5. **动态判定标准与 Jev 模板（Dynamic Criteria & Jev Templates）**：
-   - 支持通过 `--template` 选用开箱即用的预设模板（`fried_food` 油炸餐饮、`coffee` 精品咖啡、`auto` 汽车后市场、`fitness` 健身房、`general` 通用标准）；
+   - 支持通过 `--template` 选用开箱即用的预设模板（`coffee` 精品咖啡、`auto` 汽车后市场、`fitness` 健身房、`dining` 餐饮美食、`general` 通用标准）；
    - 支持通过 `--criteria` 注入任意自定义自然语言研判标准（如 `"has commercial espresso machine"`, `"offers ceramic coating or PPF"`, `"provides pediatric dentistry"`）。
 6. **中间过程文件与系统临时目录隔离（Temp Directory Isolation）**：
-   - 待审核场所图片引用与数据保存至系统临时目录 `/tmp/restaurant_lead_scout/audit/`。
+   - 待审核场所图片引用与数据保存至系统临时目录 `/tmp/place_scout/audit/`。
    - 无论用户在何处执行脚本，绝不污染用户当前工作目录与代码仓库。
 7. **Google Sheet 极简 Apps Script Webhook 云端落盘**：
    - 专为个人与非技术用户打造，无需创建 Google Cloud 开发者账号，无需复杂的服务账号或 OAuth 认证。
@@ -36,11 +36,11 @@
 10. **分段无缝导航与斜杠总览链接（适配 Google Maps 10 站限制）**：
    - 鉴于 Google Maps 原生移动端及网页端单次导航路线严格限制 **最多 10 个停靠点**（1 个起点 + 9 个途径站），系统自动将路线生成为 **4 段无缝衔接的行驶导航链接**（Leg 1 ~ Leg 4，每段 ≤ 9 站），移动端或车载 CarPlay / Android Auto 点击即开导航；同时提供桌面端全量总览链接。
 11. **规范 7 列纯英文数据报表导出 (7-Column Pure English Spreadsheet Export)**：
-   - 包含：`No.`、`Place Name`（或 `Restaurant Name`）、`Address`（详细地址含 Unit/门牌）、`Navigation Address`（规范主导航地址，多商户同商圈/商场自动垂直合并单元格去重）、`Opening Hours`、`Phone`、`Match Evidence`（全表格内容严格使用纯英文）。
+   - 包含：`No.`、`Place Name`、`Address`（详细地址含 Unit/门牌）、`Navigation Address`（规范主导航地址，多商户同商圈/商场自动垂直合并单元格去重）、`Opening Hours`、`Phone`、`Match Evidence`（全表格内容严格使用纯英文）。
 12. **智能开业状态与公休日过滤（Operational Status & Day-of-Week Gatekeeper）**：
    - **停业剔除**：强制过滤 Google Places `CLOSED_PERMANENTLY`（已倒闭）与 `CLOSED_TEMPORARILY`（已歇业）；
    - **公休过滤**：根据计划拜访日期自动计算星期几（如周一/周二），若当天为该店公休日（`Closed`），直接剔除；
-   - **时段对齐**：白天拜访时，自动排除 17:00 以后才开门的纯夜宵/酒吧（可通过 `--allow-dinner-only` 开启夜间巡检）。
+   - **时段对齐**：白天拜访时，自动排除 17:00 以后才开门的纯夜间场所（可通过 `--allow-dinner-only` 开启夜间巡检）。
 
 ---
 
@@ -216,7 +216,7 @@ python3 -m pip install -e .
 ```bash
 place-scout --direction EAST
 ```
-*(同时项目内置了免 pip 安装的通用包装脚本 `bin/place-scout` 与兼容别名 `bin/restaurant-scout`，会自动智能探测与适配 macOS Apple Silicon / x86 Python 运行环境)*
+*(同时项目内置了免 pip 安装的通用包装脚本 `bin/place-scout`，会自动智能探测与适配 macOS Apple Silicon / x86 Python 运行环境)*
 
 
 ### 3. 环境依赖安装
@@ -228,7 +228,7 @@ pip install -r requirements.txt
 ### 4. 智能体配置与初始化
 当智能体首次接管该技能或检测到缺少 API Key 时：
 1. **交互式向导**：引导用户在终端运行 `python3 scripts/main.py --setup`；
-2. **免交互初始化**：智能体可协助直接写入用户全局配置文件 `~/.config/restaurant_lead_scout/config.json`：
+2. **免交互初始化**：智能体可协助直接写入用户全局配置文件 `~/.config/place_scout/config.json`：
 ```json
 {
   "google_maps_api_key": "YOUR_ACTUAL_API_KEY",
@@ -243,10 +243,10 @@ pip install -r requirements.txt
 
 ### 4. 智能体触发词与意图识别 (Skill Triggers)
 智能体在对话中检测到以下典型意图时，即可自动激活并调用本技能：
-- **“帮我规划明天的餐馆拜访路线”**
-- **“以 [地址/链接] 为起点，朝东向找 30 家油炸餐馆”**
-- **“在 Fairview Mall 附近找 20 家炸鸡店，不要去 bb.q Chicken，带上 OLD.K CHICKEN”**
-- **“避开 Downtown 和 Scarborough，在万锦范围内扫描餐馆”**
+- **“帮我规划明天的商户拜访路线”**
+- **“以 [地址/链接] 为起点，朝东向找 30 家精品咖啡馆”**
+- **“在 Fairview Mall 附近找 20 家汽车改装店，不要去 Shell，带上 Tesla”**
+- **“避开 Downtown 和 Scarborough，在万锦范围内扫描目标场所”**
 
 ---
 
@@ -267,14 +267,14 @@ google-maps-place-scout/
 │   ├── config_manager.py             # 用户级配置管理、交互向导与多格式起点解析
 │   ├── exclusion_loader.py           # 多源异构数据摄取与智能表头归一化
 │   ├── opening_hours.py              # 营业时间简化规范与开业状态校验算法
-│   ├── fried_model_auditor.py        # 智能体多模态审核管理 (临时目录中转)
+│   ├── place_auditor.py              # 智能体多模态审核管理 (临时目录中转)
 │   ├── places_searcher.py            # Google Places API (New) 英文多跳检索与实体解析
 │   ├── filters.py                    # 实体对齐过滤 (Hard + Semantic + 状态与黑白名单)
 │   ├── directional_router.py         # 走廊切片防折返跑与辐射状路由算法
 │   ├── route_generator.py            # Google Maps 路线超链接与时刻表计算 (含同商场途径站去重)
 │   └── sheet_exporter.py             # 7 列规范 CSV / Excel / Sheet 导出 (支持商场多商户导航合并去重)
 ├── tests/
-│   └── test_skill.py                 # 单元与回归测试 (52 项测试全量覆盖)
+│   └── test_skill.py                 # 单元与回归测试 (83 项测试全量覆盖)
 └── output/                           # 最终业务产物 (Excel, CSV)
 ```
 
@@ -382,10 +382,10 @@ python3 -m unittest discover tests
 
 导出的表格（Excel 与 CSV）与云端 Google Sheet 统一采用严格的 7 列纯英文格式（商场/商圈多商户在 Excel 与 Sheet 中将自动垂直合并 Navigation Address 单元格）：
 
-| No. | Restaurant Name | Address | Navigation Address | Opening Hours | Phone | Fried Food Evidence |
+| No. | Place Name | Address | Navigation Address | Opening Hours | Phone | Match Evidence |
 | :---: | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | KoSam Korean Restaurant & Bar | 5865 Leslie St, North York, ON M2H 1J8 Canada | 5865 Leslie St, North York, ON M2H 1J8, Canada | 11:00 AM – 10:00 PM | (416) 493-0880 | Detected fried items: Korean Fried Chicken, Yangnyeom Chicken |
-| 2 | bb.q Chicken Don Mills | 38 Forest Manor Rd Unit B, North York, ON M2J 0H4 Canada | 38 Forest Manor Rd, North York, ON M2J 0H4, Canada | 12:00 PM – 11:00 PM (Tue, Wed: 4:00 PM – 11:00 PM, Fri: 12:00 PM – 12:00 AM) | (416) 561-9732 | Detected fried items: Golden Fried Chicken, Secret Spicy Wings |
-| 3 | Simba's Hot Chicken (North York) | 16 Mallard Rd, North York, ON M3B 3N1 Canada | 16 Mallard Rd, North York, ON M3B 3N1, Canada | 11:00 AM – 2:00 AM | (416) 331-8777 | Detected fried items: Nashville Hot Chicken Tender, Fries |
-| 4 | High Street Fish And Chips | 55 Underhill Dr, North York, ON M3A 2J7 Canada | 55 Underhill Dr, North York, ON M3A 2J7, Canada | 11:30 AM – 8:00 PM (Mon Closed) | (416) 510-8905 | Detected fried items: Halibut and Chips, Haddock, Onion Rings |
-| 5 | Popeyes | 85 Ellesmere Rd Unit H, Scarborough, ON M1R 4C1 Canada | 85 Ellesmere Rd, Scarborough, ON M1R 4C1, Canada | 10:30 AM – 12:00 AM (Fri: 10:30 AM – 1:00 AM) | (416) 391-5757 | Detected fried items: Signature Chicken, Tenders, Cajun Fries |
+| 1 | Pilot Coffee Roasters | 50 Wagstaff Dr, Toronto, ON M4L 3W9 Canada | 50 Wagstaff Dr, Toronto, ON M4L 3W9, Canada | 8:00 AM – 4:00 PM | (416) 546-4006 | Jev decision: Specialty Roaster (micro-lot, pour-over, espresso) |
+| 2 | De Mello Coffee | 2489 Yonge St, Toronto, ON M4P 2H6 Canada | 2489 Yonge St, Toronto, ON M4P 2H6, Canada | 7:30 AM – 6:00 PM | (416) 482-1400 | Jev decision: Specialty Roaster (in-house beans, craft espresso) |
+| 3 | Subtext Coffee Roasters | 248 Gladstone Ave, Toronto, ON M6J 3L6 Canada | 248 Gladstone Ave, Toronto, ON M6J 3L6, Canada | 8:00 AM – 3:00 PM (Mon Closed) | None | Jev decision: Artisan Craft Cafe (single origin, filter bar) |
+| 4 | Auto Obsessed Detailing | 123 Main St, Toronto, ON M1B 2C3 Canada | 123 Main St, Toronto, ON M1B 2C3, Canada | 8:30 AM – 5:30 PM (Sat, Sun Closed) | (416) 555-0199 | Jev decision: Detailing Studio (paint protection, ceramic coating) |
+| 5 | Apex Performance Gym | 456 Eglinton Ave E, Toronto, ON M4P 1N8 Canada | 456 Eglinton Ave E, Toronto, ON M4P 1N8, Canada | 6:00 AM – 10:00 PM | (416) 555-0188 | Jev decision: Strength Facility (power racks, turf track) |

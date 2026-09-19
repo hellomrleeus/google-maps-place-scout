@@ -58,7 +58,7 @@ def strip_emojis(text: str) -> str:
 def transform_google_place(p: Dict, matched_term: str = "", default_region: str = "GTA", api_key: str = "") -> Dict:
     disp = (p.get("displayName") or {}).get("text") if isinstance(p.get("displayName"), dict) else ""
     raw_name = p.get("name") if not (str(p.get("name", "")).startswith("places/")) else ""
-    name = strip_emojis(disp or raw_name or p.get("name") or "Unnamed Restaurant")
+    name = strip_emojis(disp or raw_name or p.get("name") or "Unnamed Place")
     address = p.get("address") or p.get("formattedAddress") or ""
     address = strip_emojis(address.replace("加拿大", "Canada")).strip()
     phone = p.get("phone") or p.get("nationalPhoneNumber") or "None"
@@ -77,7 +77,7 @@ def transform_google_place(p: Dict, matched_term: str = "", default_region: str 
         reviews_count = len(p.get("reviews"))
     else:
         reviews_count = 0
-    primary_type = p.get("primaryType") or "restaurant"
+    primary_type = p.get("primaryType") or "establishment"
     
     lat = float(p.get("latitude") or (p.get("location") or {}).get("latitude", 0.0))
     lng = float(p.get("longitude") or (p.get("location") or {}).get("longitude", 0.0))
@@ -272,7 +272,7 @@ class PlacesSearcher:
         elif place_types and any(t.strip() for t in place_types):
             selected_keywords = [t.strip().replace("_", " ") for t in place_types if t.strip()][:4]
         else:
-            selected_keywords = ["fried chicken", "chicken wings", "fish and chips"]
+            selected_keywords = ["point of interest"]
 
         primary_type_filter = place_types[0].strip() if (place_types and len(place_types) == 1) else None
         min_pool_target = max(100, target_count * 4)
@@ -282,14 +282,7 @@ class PlacesSearcher:
             probe_new_count = 0
 
             for kw in selected_keywords:
-                kw_clean = kw.strip()
-                # If custom place types or custom keywords given, use query directly without appending 'restaurant'
-                if place_types or (keywords and keywords != ["fried chicken", "chicken wings", "fish and chips"]):
-                    query = kw_clean
-                else:
-                    kw_lower = kw_clean.lower()
-                    has_suffix = any(term in kw_lower for term in ["restaurant", "food", "court", "dining", "kitchen", "cafe", "bakery", "eatery", "bar"])
-                    query = kw_clean if has_suffix else f"{kw_clean} restaurant"
+                query = kw.strip()
 
                 try:
                     data = self.search_places_api(

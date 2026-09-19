@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Main entrypoint for Daily Restaurant Lead Scout & Route Planner Skill.
+Main entrypoint for Google Maps Place Scout & Corridor Planner Skill.
 Orchestrates:
 1. Google Places search along a unidirectional travel corridor in English.
-2. Filtering out contracted and visited restaurants (mock CRM & Google Sheet).
-3. Agent-Native multimodal AI audit of menus & dish photos (Zero external API key).
+2. Filtering out contracted and visited places (CRM & Google Sheet).
+3. Agent-Native multimodal AI audit of places & storefront photos (Zero external API key).
 4. Directional slice & cluster sweep algorithm (Anti-Shuttle "不要折返跑").
 5. Full 30-stop slash-concatenated Google Maps URL (bypassing 10-stop limit).
-6. Exporting strict 7-column English spreadsheet (No., Restaurant Name, Address, Navigation Address, Opening Hours, Phone, Fried Food Evidence).
+6. Exporting strict 7-column English spreadsheet (No., Place Name, Address, Navigation Address, Opening Hours, Phone, Match Evidence).
 """
 
 import os
@@ -22,7 +22,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
-from filters import RestaurantFilter
+from filters import PlaceFilter
 from places_searcher import PlacesSearcher
 from directional_router import (
     DirectionalRouter,
@@ -30,7 +30,7 @@ from directional_router import (
     generate_radial_probe_points,
     haversine_distance_km
 )
-from fried_model_auditor import AgentAuditManager
+from place_auditor import PlaceAuditManager
 from route_generator import RouteGenerator
 from sheet_exporter import SheetExporter
 from config_manager import (
@@ -58,7 +58,7 @@ def parse_bearing(direction_arg: str, config_directions: dict) -> float:
         return 90.0
 
 def main():
-    parser = argparse.ArgumentParser(description="Daily Restaurant Lead Scout & Route Planner Skill")
+    parser = argparse.ArgumentParser(description="Google Maps Place Scout & Corridor Planner Skill")
     parser.add_argument("--setup", action="store_true", help="启动交互式配置向导设置 API Key 与 Google Sheet")
     parser.add_argument("--configure", action="store_true", help="非交互式更新配置模式 (供智能体或自动化脚本直接调用)")
     parser.add_argument("--set-api-key", type=str, default=None, help="设置 Google Maps API Key")
@@ -70,16 +70,16 @@ def main():
     parser.add_argument("--set-origin", type=str, default=None, help="设置默认出发起点 (支持文本地址、Google 地图链接或经纬度坐标)")
     parser.add_argument("--check-config", action="store_true", help="查看当前持久化配置状态 (输出结构化 JSON 供智能体检查)")
     parser.add_argument("--sheet-url", type=str, default=None, help="Google Apps Script Webhook URL (例如: https://script.google.com/macros/s/.../exec)")
-    parser.add_argument("--contracted-source", type=str, default=None, help="已签约商家数据源 (本地 Excel/CSV/JSON 路径或 REST API URL)")
-    parser.add_argument("--visited-source", type=str, default=None, help="已拜访商家数据源 (本地 Excel/CSV/JSON 路径或 REST API URL)")
+    parser.add_argument("--contracted-source", type=str, default=None, help="已签约场所数据源 (本地 Excel/CSV/JSON 路径或 REST API URL)")
+    parser.add_argument("--visited-source", type=str, default=None, help="已拜访场所数据源 (本地 Excel/CSV/JSON 路径或 REST API URL)")
     parser.add_argument("--origin", type=str, default=None, help="出发起点 (支持 Google 地图链接、文本地址/商圈地标或 '纬度,经度' 坐标)")
     parser.add_argument("--exclude-regions", type=str, default=None, help="逗号分隔的避开/禁行区域或地标关键词 (例如 'scarborough,downtown')")
     parser.add_argument("--include-regions", type=str, default=None, help="逗号分隔的限定区域关键词 (例如 'markham')")
-    parser.add_argument("--exclude-restaurants", type=str, default=None, help="逗号分隔的特定排除餐馆名称或关键词 (例如 'Popeyes,Churchs')")
-    parser.add_argument("--include-restaurants", type=str, default=None, help="逗号分隔的特定必选餐馆名称、Google 地图链接或地址 (例如 'bb.q Chicken Don Mills')")
+    parser.add_argument("--exclude-places", "--exclude-names", type=str, default=None, help="逗号分隔的特定排除场所名称或关键词 (例如 'Tim Hortons,Shell')")
+    parser.add_argument("--include-places", "--include-names", type=str, default=None, help="逗号分隔的特定必选场所名称、Google 地图链接或地址 (例如 'Pilot Coffee Roasters')")
     parser.add_argument("--radius", type=float, default=None, help="搜索半径或探测纵深 (km，例如在XXXX附近 6 公里找)")
     parser.add_argument("--direction", type=str, default=None, help="Travel direction (east, northeast, north, south, west, radial/nearby, or bearing angle)")
-    parser.add_argument("--count", type=int, default=None, help="Target number of confirmed restaurants (default 30)")
+    parser.add_argument("--count", type=int, default=None, help="Target number of confirmed places (default 30)")
     parser.add_argument("--origin-name", type=str, default=None, help="Starting location name")
     parser.add_argument("--origin-address", type=str, default=None, help="Starting address")
     parser.add_argument("--origin-lat", type=float, default=None, help="Starting latitude")
@@ -88,16 +88,16 @@ def main():
     parser.add_argument("--max-depth", type=float, default=None, help="Maximum along-track search depth in km")
     parser.add_argument("--departure-time", type=str, default=None, help="出发时间 (格式如 09:30，默认读取配置或 09:30)")
     parser.add_argument("--visit-date", type=str, default=None, help="拜访日期 (YYYY-MM-DD，也可输入 'today' / 'tomorrow'，默认自适应)")
-    parser.add_argument("--allow-dinner-only", action="store_true", help="允许仅晚间/夜宵时段营业的餐馆 (默认自动排除白天未营业的夜店)")
-    parser.add_argument("--keep-closed", action="store_true", help="禁用开业状态校验 (保留公休与停业餐馆)")
+    parser.add_argument("--allow-dinner-only", action="store_true", help="允许仅晚间/夜宵时段营业的场所 (默认自动排除白天未营业的场所)")
+    parser.add_argument("--keep-closed", action="store_true", help="禁用开业状态校验 (保留公休与停业场所)")
     parser.add_argument("--dump-audit-only", action="store_true", help="Dump pending audit queue for agent inspection and pause")
     parser.add_argument("--search-center", type=str, default=None, help="目标搜索中心/商圈 (支持商圈地标、文本地址或 '纬度,经度' 坐标，解耦出发大本营)")
     parser.add_argument("--search-radius", type=float, default=None, help="目标搜索中心探测半径 (km，默认读取配置或 2.0 km)")
     parser.add_argument("--bounds", type=str, default=None, help="严格矩形边框过滤 'min_lat,min_lng,max_lat,max_lng'")
     parser.add_argument("--keywords", type=str, default=None, help="逗号分隔的自定义探测关键词列表 (覆盖或追加)")
-    parser.add_argument("--place-types", "--types", type=str, default=None, help="逗号分隔的目标地点类型 (如 'restaurant', 'cafe', 'gym', 'car_wash', 'dentist')")
+    parser.add_argument("--place-types", "--types", type=str, default=None, help="逗号分隔的目标地点类型 (如 'cafe', 'gym', 'car_wash', 'dentist')")
     parser.add_argument("--criteria", type=str, default=None, help="自定义研判判定标准 (如 'has commercial espresso machine', 'offers oil change')")
-    parser.add_argument("--template", type=str, default=None, help="判定标准预设模板 (fried_food, coffee, auto, fitness, general)")
+    parser.add_argument("--template", type=str, default=None, help="判定标准预设模板 (general, coffee, auto, fitness, dining)")
     parser.add_argument("--config", type=str, default=None, help="Path to custom config.json")
     args = parser.parse_args()
 
@@ -118,115 +118,85 @@ def main():
             origin_str=args.set_origin
         )
         status = get_config_summary(args.config)
-        print("配置更新成功！当前状态：")
-        print(f"  运行模式: {status['mode']} ({status['config_file']})")
-        print(f"  Google Maps API Key: {status['api_key_masked']}")
-        print(f"  TypeSafe (Jev) API Key: {status.get('typesafe_key_masked', status.get('openrouter_key_masked'))}")
-        print(f"  Google Sheet 目标: {status['google_sheet_url']}")
-        print(f"  默认出发起点: {status['default_origin']['name']} - {status['default_origin']['address']}")
-        print("-" * 50)
-        print("您现在可以重新运行命令开始规划路线，例如: python3 scripts/main.py")
+        print(json.dumps(status, ensure_ascii=False, indent=2))
         return status
 
-    # If --setup requested, run interactive wizard directly
+    # Interactive setup wizard
     if args.setup:
-        run_interactive_setup()
-        print("您现在可以重新运行命令开始规划路线，例如: python3 scripts/main.py")
-        return {"status": "setup_completed"}
+        run_interactive_setup(config_save_path=args.config)
+        return
 
+    # Load configuration
     cfg = load_effective_config(custom_config_path=args.config)
-
-    # CLI sheet override (Google Apps Script Webhook URL)
-    cli_sheet_url = args.sheet_url or os.environ.get("GOOGLE_SHEET_WEBHOOK_URL") or os.environ.get("GOOGLE_SHEET_URL")
-    if cli_sheet_url:
-        if "google_sheets" not in cfg:
-            cfg["google_sheets"] = {}
-        cleaned_sheet = cli_sheet_url.strip()
-        cfg["google_sheets"]["webhook_url"] = cleaned_sheet
-        cfg["google_sheets"]["spreadsheet_url"] = cleaned_sheet
-        cfg["google_sheets"]["spreadsheet_id"] = cleaned_sheet
-        cfg["google_sheets"]["enabled"] = True
-
-    # TypeSafe / Jev API Key for Jev Decision Model
-    typesafe_api_key = (
-        args.typesafe_key
-        or args.openrouter_key
-        or cfg.get("typesafe_api_key", "").strip()
-        or cfg.get("jev_api_key", "").strip()
-        or cfg.get("openrouter_api_key", "").strip()
-        or os.environ.get("TYPESAFE_API_KEY", "").strip()
-        or os.environ.get("JEV_API_KEY", "").strip()
-        or os.environ.get("OPENROUTER_API_KEY", "").strip()
+    openrouter_api_key = (
+        args.openrouter_key
+        or args.typesafe_key
+        or cfg.get("typesafe_api_key")
+        or cfg.get("openrouter_api_key")
+        or os.environ.get("TYPESAFE_API_KEY")
+        or os.environ.get("JEV_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY", "")
     )
-    openrouter_api_key = typesafe_api_key
 
-    # 1. Resolve Origin
-    origin_cfg = cfg.get("default_origin", {})
-    if args.origin:
-        resolved = resolve_origin_input(args.origin, api_key=cfg.get("google_maps_api_key", ""))
-        origin_name = args.origin_name or resolved["name"]
-        origin_address = args.origin_address or resolved["address"]
-        origin_lat = args.origin_lat if args.origin_lat is not None else resolved["latitude"]
-        origin_lng = args.origin_lng if args.origin_lng is not None else resolved["longitude"]
-    else:
-        origin_name = args.origin_name or origin_cfg.get("name", "Field Operations Base")
-        origin_address = args.origin_address or origin_cfg.get("address", "North York, Toronto, ON")
-        origin_lat = args.origin_lat if args.origin_lat is not None else origin_cfg.get("latitude", 43.7615)
-        origin_lng = args.origin_lng if args.origin_lng is not None else origin_cfg.get("longitude", -79.4111)
-
-    origin = {
-        "name": origin_name,
-        "address": origin_address,
-        "latitude": origin_lat,
-        "longitude": origin_lng
-    }
-
-    # Date and schedule resolution (auto-adaptive for morning vs evening runs)
-    now = datetime.now()
-    today_date = now.strftime("%Y-%m-%d")
-    tomorrow_date = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    raw_visit_date = (args.visit_date or "").strip()
-    if not raw_visit_date or raw_visit_date.lower() == "auto":
-        default_pref = cfg.get("default_visit_target", "auto").lower()
-        if default_pref == "today":
-            visit_date = today_date
-            date_label = "当日拜访"
-        elif default_pref == "tomorrow":
-            visit_date = tomorrow_date
-            date_label = "次日拜访"
+    # Resolve departure date
+    today_dt = datetime.now()
+    if not args.visit_date:
+        target_mode = cfg.get("default_visit_target", "auto").lower().strip()
+        if target_mode in ("tomorrow", "next_day"):
+            visit_dt = today_dt + timedelta(days=1)
+            date_label = "明天"
+        elif target_mode in ("today", "same_day"):
+            visit_dt = today_dt
+            date_label = "今天"
         else:
-            # 默认根据当前时间自适应：15:00 之前规划当日，15:00 之后规划次日
-            if now.hour >= 15:
-                visit_date = tomorrow_date
-                date_label = "次日拜访"
+            if today_dt.hour >= 18:
+                visit_dt = today_dt + timedelta(days=1)
+                date_label = "明天 (晚间自适应)"
             else:
-                visit_date = today_date
-                date_label = "当日拜访"
-    elif raw_visit_date.lower() in ("today", "今天", "当日"):
-        visit_date = today_date
-        date_label = "当日拜访"
-    elif raw_visit_date.lower() in ("tomorrow", "明天", "次日"):
-        visit_date = tomorrow_date
-        date_label = "次日拜访"
+                visit_dt = today_dt
+                date_label = "今天 (日间自适应)"
+        visit_date = visit_dt.strftime("%Y-%m-%d")
     else:
-        visit_date = raw_visit_date
-        if visit_date == today_date:
-            date_label = "当日拜访"
-        elif visit_date == tomorrow_date:
-            date_label = "次日拜访"
+        raw_date_arg = args.visit_date.strip().lower()
+        if raw_date_arg in ("today", "今", "今日", "今天"):
+            visit_dt = today_dt
+            date_label = "今天"
+            visit_date = visit_dt.strftime("%Y-%m-%d")
+        elif raw_date_arg in ("tomorrow", "明", "明日", "明天"):
+            visit_dt = today_dt + timedelta(days=1)
+            date_label = "明天"
+            visit_date = visit_dt.strftime("%Y-%m-%d")
         else:
-            date_label = f"指定日期: {visit_date}"
+            visit_date = args.visit_date.strip()
+            date_label = "指定日期"
 
+    # Resolve departure time
     dep_time = args.departure_time or cfg.get("default_departure_time", "09:30")
 
-    # Resolve settings
+    # Resolve origin
+    origin = cfg.get("default_origin", {})
+    origin_name = args.origin_name or origin.get("name", "Field Operations Base")
+    origin_address = args.origin_address or origin.get("address", "North York, Toronto, ON")
+    origin_lat = args.origin_lat or origin.get("latitude", 43.7615)
+    origin_lng = args.origin_lng or origin.get("longitude", -79.4111)
+
+    if args.origin:
+        resolved_origin = resolve_origin_input(args.origin, api_key=cfg.get("google_maps_api_key"))
+        origin_name = resolved_origin["name"]
+        origin_address = resolved_origin["address"]
+        origin_lat = resolved_origin["latitude"]
+        origin_lng = resolved_origin["longitude"]
+
+    # Target Count
+    target_count = args.count or cfg.get("target_count", 30)
+
+    # Directions and corridor settings
     corridor_cfg = cfg.get("corridor_settings", {})
     direction_str = args.direction or corridor_cfg.get("default_direction", "east")
     bearing = parse_bearing(direction_str, cfg.get("directions", {}))
-    target_count = args.count or cfg.get("target_count", 30)
+
     corridor_width_km = args.corridor_width or corridor_cfg.get("corridor_width_km", 4.5)
-    max_depth_km = args.radius or args.max_depth or corridor_cfg.get("max_search_depth_km", 28.0)
+    max_depth_km = args.max_depth or (args.radius if not args.search_center else None) or corridor_cfg.get("max_search_depth_km", 28.0)
     step_km = corridor_cfg.get("step_distance_km", 3.0)
 
     # Place types, template, and criteria resolution
@@ -234,13 +204,13 @@ def main():
     if place_types_arg:
         place_types = [t.strip() for t in place_types_arg.split(",") if t.strip()]
     else:
-        place_types = cfg.get("place_types", ["restaurant"])
+        place_types = cfg.get("place_types", ["point_of_interest"])
 
-    template = (args.template or cfg.get("template", "fried_food")).strip().lower()
+    template = (args.template or cfg.get("template", "general")).strip().lower()
     criteria = (args.criteria or cfg.get("criteria", "")).strip()
 
     print("\n" + "=" * 70)
-    print("Universal Public Place Scout & Corridor Planner")
+    print("Google Maps Place Scout & Corridor Planner")
     print("=" * 70)
     print(f"规划拜访日期: {visit_date} ({date_label}) | 预定出发: {dep_time}")
     print(f"出发起点: {origin_name} ({origin_address})")
@@ -275,7 +245,7 @@ def main():
         output_dir = get_user_cache_dir("routes")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Intermediate audit directory: system temporary directory (never pollutes workspace)
+    # Intermediate audit directory: system temporary directory
     temp_audit_dir = get_temp_dir("audit")
 
     # Initialize SheetExporter
@@ -322,14 +292,12 @@ def main():
         searcher = PlacesSearcher(api_key=api_key, referer=referer)
         if args.keywords:
             keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
-        elif template != "fried_food" or any(t != "restaurant" for t in place_types):
+        else:
             configured_kws = cfg.get("keywords")
             if configured_kws:
                 keywords = configured_kws
             else:
                 keywords = [t.replace("_", " ") for t in place_types]
-        else:
-            keywords = cfg.get("fried_keywords", ["fried chicken", "wings", "fish and chips", "katsu", "tempura"])
 
         probe_radius_m = int(search_radius_km * 1000 if args.search_center else corridor_width_km * 1000)
         raw_candidates = searcher.search_corridor_probes(
@@ -355,9 +323,9 @@ def main():
             except Exception as e:
                 print(f"  [Warning] 矩形边框参数解析失败: {e}")
 
-        # Check if user specified any mandatory restaurants via URL or address that need to be injected into candidates
-        if args.include_restaurants:
-            mand_list = [m.strip() for m in args.include_restaurants.split(",") if m.strip()]
+        # Check if user specified any mandatory places via URL or address that need to be injected into candidates
+        if args.include_places:
+            mand_list = [m.strip() for m in args.include_places.split(",") if m.strip()]
             for item in mand_list:
                 if "http" in item or re.search(r"\d", item):
                     resolved_mand = resolve_origin_input(item, api_key=api_key)
@@ -378,42 +346,40 @@ def main():
         print(f"  初始检索到 {len(raw_candidates)} 家潜在目标场所。\n")
 
         # Step 2: Apply Filters (Contracted CRM & Visited Sheets + Spatial Geofencing + Manual Overrides)
-        print("【步骤 2/5】执行商家过滤规则 (多源自适应摄取 + 模型语义实体对齐 + 地理空间与场所自定义约束)...")
+        print("【步骤 2/5】执行场所过滤规则 (多源自适应摄取 + 模型语义实体对齐 + 地理空间与场所自定义约束)...")
         exclude_regions = [r.strip() for r in args.exclude_regions.split(",")] if args.exclude_regions else []
         include_regions = [r.strip() for r in args.include_regions.split(",")] if args.include_regions else []
-        exclude_restaurants = [r.strip() for r in args.exclude_restaurants.split(",")] if args.exclude_restaurants else []
-        mandatory_restaurants = [r.strip() for r in args.include_restaurants.split(",")] if args.include_restaurants else []
+        exclude_places = [r.strip() for r in args.exclude_places.split(",")] if args.exclude_places else []
+        mandatory_places = [r.strip() for r in args.include_places.split(",")] if args.include_places else []
 
-        r_filter = RestaurantFilter(
+        r_filter = PlaceFilter(
             contracted_path=contracted_path,
             visited_path=visited_path,
             exclude_regions=exclude_regions,
             include_regions=include_regions,
-            exclude_restaurants=exclude_restaurants,
-            mandatory_restaurants=mandatory_restaurants,
-            exclude_places=exclude_restaurants,
-            mandatory_places=mandatory_restaurants,
+            exclude_places=exclude_places,
+            mandatory_places=mandatory_places,
             visit_date=visit_date,
             departure_time=dep_time,
             filter_closed=not args.keep_closed,
             allow_dinner_only=args.allow_dinner_only or cfg.get("allow_dinner_only", False),
             openrouter_api_key=openrouter_api_key
         )
-        filtered_candidates, filter_stats = r_filter.filter_restaurants(raw_candidates)
+        filtered_candidates, filter_stats = r_filter.filter_places(raw_candidates)
         if filter_stats.get("mandatory_count", 0) > 0:
-            print(f"  包含用户指定必选商家: {filter_stats['mandatory_count']} 家")
+            print(f"  包含用户指定必选场所: {filter_stats['mandatory_count']} 家")
             for item in filter_stats.get("mandatory_details", []):
                 print(f"     ↳ {item['name']}: {item['reason']}")
         if filter_stats.get("excluded_manual", 0) > 0:
-            print(f"  排除用户指定排除商家: {filter_stats['excluded_manual']} 家")
+            print(f"  排除用户指定排除场所: {filter_stats['excluded_manual']} 家")
             for item in filter_stats.get("manual_details", [])[:3]:
                 print(f"     ↳ {item['name']}: {item['reason']}")
         if filter_stats.get("excluded_regions", 0) > 0:
-            print(f"  排除避开/禁行区域商家: {filter_stats['excluded_regions']} 家")
+            print(f"  排除避开/禁行区域场所: {filter_stats['excluded_regions']} 家")
             for item in filter_stats.get("region_details", [])[:3]:
                 print(f"     ↳ {item['name']}: {item['reason']}")
         if filter_stats.get("excluded_closed", 0) > 0:
-            print(f"  排除未开业/公休/纯夜宵餐馆: {filter_stats['excluded_closed']} 家")
+            print(f"  排除未开业/公休/纯夜间场所: {filter_stats['excluded_closed']} 家")
             for item in filter_stats.get("closed_details", [])[:3]:
                 print(f"     ↳ {item['name']}: {item['reason']}")
         print(f"  排除已签约商家 (CRM): {filter_stats['excluded_contracted']} 家")
@@ -425,11 +391,11 @@ def main():
         for s in semantic_samples[:3]:
             print(f"       ↳ {s['name']}: {s['reason']}")
 
-        print(f"  满足准入条件的开拓候选商家: {filter_stats['accepted_count']} 家\n")
+        print(f"  满足准入条件的开拓候选场所: {filter_stats['accepted_count']} 家\n")
 
         # Step 3: Agent-Native Cascaded Active Multimodal Audit (Jev Fast Text Triage + Agent Vision)
         print("【步骤 3/5】执行基于置信度的级联主动研判 (Jev 文本快筛 + 智能体原生多模态视觉精审)...")
-        audit_mgr = AgentAuditManager(
+        audit_mgr = PlaceAuditManager(
             audit_dir=temp_audit_dir,
             openrouter_api_key=openrouter_api_key,
             criteria=criteria,
@@ -455,19 +421,16 @@ def main():
         verified_candidates = []
         for c in filtered_candidates:
             if c.get("_is_pinned"):
-                # Pinned by user: bypasses category audit
                 c_copy = dict(c)
-                pinned_feat = c.get("_matched_features") or c.get("_fried_dishes") or ["Special request (User Pinned)"]
+                pinned_feat = c.get("_matched_features") or ["Special request (User Pinned)"]
                 c_copy["_matched_features"] = pinned_feat
-                c_copy["_fried_dishes"] = pinned_feat
-                c_copy["_audit_rationale"] = "Priority visit (User pinned merchant)"
+                c_copy["_audit_rationale"] = "Priority visit (User pinned place)"
                 verified_candidates.append(c_copy)
                 continue
             is_match, confidence, features, rationale = audit_mgr.audit_place(c)
             if is_match:
                 c_copy = dict(c)
                 c_copy["_matched_features"] = features
-                c_copy["_fried_dishes"] = features
                 c_copy["_audit_rationale"] = rationale
                 verified_candidates.append(c_copy)
 
@@ -492,14 +455,13 @@ def main():
         if args.search_center and (search_lat != origin_lat or search_lng != origin_lng):
             d_origin_target = haversine_distance_km(origin_lat, origin_lng, search_lat, search_lng)
             if not args.direction:
-                # Dynamically calculate bearing from origin to target search center
                 mean_lat = math.radians((origin_lat + search_lat) / 2)
                 dx = (search_lng - origin_lng) * (math.pi / 180.0) * 6371.0 * math.cos(mean_lat)
                 dy = (search_lat - origin_lat) * (math.pi / 180.0) * 6371.0
                 router_bearing = (math.degrees(math.atan2(dx, dy)) + 360) % 360
             router_max_depth = max(max_depth_km, d_origin_target + search_radius_km + 15.0)
             router_corridor_width = max(corridor_width_km, search_radius_km + 12.0)
-            effective_radial = False  # Monotonically sweep from departure base towards target commercial center
+            effective_radial = False
 
         router = DirectionalRouter(
             origin=origin,
@@ -516,11 +478,11 @@ def main():
             final_stops = router.plan_unidirectional_route(verified_candidates, target_count=target_count)
 
         if len(final_stops) < target_count:
-            print(f"[Notice] 提示: 走廊内符合单向条件的餐馆共 {len(final_stops)} 家 (少于预设目标 {target_count} 家)。")
+            print(f"[Notice] 提示: 走廊内符合单向条件的场所共 {len(final_stops)} 家 (少于预设目标 {target_count} 家)。")
         else:
-            print(f"  成功沿单向走廊优选锁定 {len(final_stops)} 家确定拜访餐馆！")
+            print(f"  成功沿单向走廊优选锁定 {len(final_stops)} 家确定拜访场所！")
 
-        # Step 5: Generate Slash Navigation URL and Export 5-Column Spreadsheet
+        # Step 5: Generate Slash Navigation URL and Export 7-Column Spreadsheet
         print(f"\n【步骤 5/5】生成斜杠拼接 {len(final_stops)} 站导航 URL 并导出规范数据表...")
         route_gen = RouteGenerator(
             origin_name=origin_name,
@@ -537,7 +499,7 @@ def main():
         # Google Sheets sync check (Google Apps Script Webhook)
         if gs_cfg.get("enabled") and webhook_url:
             configured_tab = gs_cfg.get("sheet_name")
-            if not configured_tab or configured_tab == "Daily Field Sales Route":
+            if not configured_tab or configured_tab in ("Daily Field Sales Route", "Daily Places Scout Route"):
                 sheet_tab_name = f"{visit_date} ({direction_str.upper()})"
             else:
                 sheet_tab_name = configured_tab
@@ -551,7 +513,6 @@ def main():
         if excel_path:
             print(f"  7 列纯英文 Excel (.xlsx) 清单已生成 (含导航地址合并去重): {excel_path}")
 
-        # Generate Agent-Ready Markdown Summary and JSON Summary
         meta_report = {
             "visit_date": visit_date,
             "date_label": date_label,
@@ -584,7 +545,6 @@ def main():
 
         print(f"  Markdown 格式总结报告已生成: {summary_md_path}")
 
-        # Display Executive Summary Block
         print("\n" + "=" * 70)
         print("【AGENT IN-CHAT REPORT / 请智能体直接在对话窗口展示以下内容】")
         print("=" * 70)

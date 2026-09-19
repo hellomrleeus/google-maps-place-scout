@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Configuration and Setup Manager for Daily Restaurant Lead Scout.
+Configuration and Setup Manager for Google Maps Place Scout.
 Handles:
-1. Cross-platform user-level configuration (~/.config/restaurant_lead_scout/config.json).
+1. Cross-platform user-level configuration (~/.config/place_scout/config.json).
 2. Local project fallback configuration (./config.json).
 3. Zero-code interactive setup wizard for non-technical users.
 4. Storage and validation of Google Apps Script Webhook URL for Google Sheet synchronization.
@@ -18,9 +18,9 @@ import urllib.request
 import urllib.parse
 from typing import Dict, Any, Optional
 
-USER_CONFIG_DIR = os.path.expanduser("~/.config/restaurant_lead_scout")
+USER_CONFIG_DIR = os.path.expanduser("~/.config/place_scout")
 USER_CONFIG_FILE = os.path.join(USER_CONFIG_DIR, "config.json")
-USER_CACHE_DIR = os.path.expanduser("~/.cache/restaurant_lead_scout")
+USER_CACHE_DIR = os.path.expanduser("~/.cache/place_scout")
 
 def find_project_root(start_dir: Optional[str] = None) -> Optional[str]:
     """
@@ -98,13 +98,13 @@ def get_effective_storage_paths(custom_config_path: Optional[str] = None) -> Dic
 
     if is_project:
         config_file = custom_config_path or os.path.join(project_root, "config.json")
-        cache_dir = os.path.join(project_root, ".cache", "restaurant_lead_scout")
-        temp_dir = os.path.join(project_root, ".cache", "restaurant_lead_scout", "audit")
+        cache_dir = os.path.join(project_root, ".cache", "place_scout")
+        temp_dir = os.path.join(project_root, ".cache", "place_scout", "audit")
         output_dir = os.path.join(project_root, "output")
     else:
         config_file = custom_config_path or USER_CONFIG_FILE
         cache_dir = USER_CACHE_DIR
-        temp_dir = os.path.join(tempfile.gettempdir(), "restaurant_lead_scout", "audit")
+        temp_dir = os.path.join(tempfile.gettempdir(), "place_scout", "audit")
         output_dir = os.path.join(USER_CACHE_DIR, "routes")
 
     return {
@@ -125,9 +125,9 @@ def get_temp_dir(subfolder: str = "audit") -> str:
     """Returns directory for intermediate files, isolated in project if available or system temp."""
     paths = get_effective_storage_paths()
     if paths["is_project_mode"]:
-        target_dir = os.path.join(paths["project_root"], ".cache", "restaurant_lead_scout", subfolder) if subfolder else paths["cache_dir"]
+        target_dir = os.path.join(paths["project_root"], ".cache", "place_scout", subfolder) if subfolder else paths["cache_dir"]
     else:
-        base_tmp = os.path.join(tempfile.gettempdir(), "restaurant_lead_scout")
+        base_tmp = os.path.join(tempfile.gettempdir(), "place_scout")
         target_dir = os.path.join(base_tmp, subfolder) if subfolder else base_tmp
     os.makedirs(target_dir, exist_ok=True)
     return target_dir
@@ -344,7 +344,7 @@ def load_base_template() -> Dict[str, Any]:
             "webhook_url": "",
             "spreadsheet_id": "",
             "spreadsheet_url": "",
-            "sheet_name": "Daily Field Sales Route"
+            "sheet_name": "Daily Places Scout Route"
         }
     }
 
@@ -486,7 +486,7 @@ def run_interactive_setup(existing_cfg: Optional[Dict[str, Any]] = None, config_
         return cfg
 
     print("\n" + "=" * 70)
-    print("欢迎使用 Daily Restaurant Lead Scout (配置向导)")
+    print("欢迎使用 Google Maps Place Scout (配置向导)")
     print("=" * 70)
     print(f"运行模式: {paths['mode_label']}")
     print(f"配置文件保存路径: {save_file}\n")
@@ -580,7 +580,7 @@ def load_effective_config(custom_config_path: Optional[str] = None, allow_intera
     Loads configuration adhering to the precedence hierarchy:
     1. Custom path if provided via --config.
     2. Detected project-mode config (<project_root>/config.json).
-    3. User global config (~/.config/restaurant_lead_scout/config.json).
+    3. User global config (~/.config/place_scout/config.json).
     4. Auto-triggers interactive setup if run in interactive terminal and unconfigured.
     5. Fallback template.
     """
