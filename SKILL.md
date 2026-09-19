@@ -439,26 +439,32 @@ This skill is architected around a **Tripartite Collaboration Framework (äºº - æ
 +-----------------------------------------------------------------------------+
 ```
 
-### Cascaded Multimodal Inspection Protocol
-1. **Fast Text Triage**:
-   During Step 3, Python and Jev (`jev-latest` via TypeSafe System One API) resolve 80%+ of obvious candidates in milliseconds (e.g. obvious category matches or completely unrelated businesses).
-2. **Selective Ambiguity Isolation**:
-   Only borderline candidates ($0.30 < P < 0.85$, such as hybrid venues, multi-service centers, newly opened places) have their facility and storefront photos downloaded to:
-   `<temp_dir>/audit/photos/<place_id>_0.jpg`
-   and indexed in `pending_agent_audit.json`.
-3. **Agent Native Vision Intervention**:
-   The executing AI Agent detects the ambiguous candidates, calls its native `view_file` tool to inspect the downloaded storefront and interior photos, and evaluates visual cues according to the target criteria (e.g., commercial equipment, service bays, specialty facilities, etc.).
+### Cascaded Multimodal Inspection Protocol & Zero-API Handshake
+1. **Zero-API Mode (No Jev Key Required)**:
+   When no JEV API Key is configured, the system activates the **Agent-Native Cognitive Handshake Protocol**. Rather than silently falling back to brittle keyword matching, the Python engine exports candidate places and downloaded photos to a prompt-ready packet `pending_agent_audit.json` and emits `[AGENT_ACTION_REQUIRED]`.
+2. **Fast Text Triage (When Jev Key is Present)**:
+   If Jev (`jev-latest` via TypeSafe System One API) is configured, it resolves 80%+ of obvious candidates in milliseconds. Only borderline candidates ($0.30 < P < 0.85$, such as hybrid venues or multi-service centers) have their photos downloaded and routed to the Agent.
+3. **Agent Action Required SOP (Mandatory for Host AI Agent)**:
+   > [!IMPORTANT]
+   > **Agent Autoloop & Re-execution Protocol**:
+   > When the executing AI Agent receives the `[AGENT_ACTION_REQUIRED]` banner:
+   > 1. **DO NOT** stop and present an incomplete route or failure message to the human user.
+   > 2. Read `<temp_dir>/audit/pending_agent_audit.json` using `view_file` or file read tools.
+   > 3. For candidates with `local_photo_paths`, inspect the storefront and interior photos using native multimodal `view_file`.
+   > 4. Evaluate each candidate against `target_criteria` using your own reasoning and vision.
+   > 5. Write the final verdicts to `<temp_dir>/audit/agent_audit_results.json` (format: dictionary `{ "<placeId>": { "is_match": true/false, "matched_features": [...], "rationale": "..." } }` or list).
+   > 6. **Immediately re-run the exact same Python command**. The second run will load your decisions with 100% precedence, bypass the pause, and generate the final 30-stop route seamlessly.
+
 4. **Verdict Ingestion & Priority Locking**:
    The Agent records the verified decisions in `<temp_dir>/audit/agent_audit_results.json`:
    ```json
-   [
-     {
-       "placeId": "ChIJ...",
+   {
+     "ChIJ...": {
        "is_match": true,
        "matched_features": ["specialty equipment", "dedicated workspace"],
        "rationale": "Verified by Agent multimodal visual inspection: Storefront and facility photos confirm criteria match"
      }
-   ]
+   }
    ```
    Future runs immediately ingest this file with 100% priority, ensuring persistent memory without re-evaluating.
 

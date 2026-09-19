@@ -97,6 +97,7 @@ def main():
     parser.add_argument("--place-types", "--types", type=str, default=None, help="逗号分隔的目标地点类型 (如 'cafe', 'gym', 'car_wash', 'dentist')")
     parser.add_argument("--criteria", type=str, default=None, help="自定义研判判定标准 (如 'has commercial espresso machine', 'offers oil change')")
     parser.add_argument("--template", type=str, default=None, help="判定标准预设模板 (general, coffee, auto, fitness, dining)")
+    parser.add_argument("--skip-agent-audit", action="store_true", help="跳过智能体原生认知研判握手，直接采用本地规则后备")
     parser.add_argument("--config", type=str, default=None, help="Path to custom config.json")
     args = parser.parse_args()
 
@@ -425,19 +426,48 @@ def main():
         )
         pending_audit_file = audit_mgr.export_pending_audit(filtered_candidates)
         ambiguous_items = audit_mgr.ambiguous_candidates
-
-        if ambiguous_items:
-            print(f"  [智能体多模态提示] 发现 {len(ambiguous_items)} 家存疑场所 (Jev 判定模糊)，已下载照片至系统临时目录:")
-            for amb in ambiguous_items:
-                photos_str = ", ".join([os.path.basename(p) for p in amb.get("local_photo_paths", [])]) or "无可用照片"
-                print(f"     ↳ {amb.get('name')} ({amb.get('primaryType')}): Jev 概率 {int(amb.get('jev_confidence', 0.5)*100)}% | 本地照片: {photos_str}")
-            print(f"     待审清单已就绪: {pending_audit_file}")
+        results_file = os.path.join(temp_audit_dir, "agent_audit_results.json")
 
         if args.dump_audit_only:
-            results_file = os.path.join(temp_audit_dir, "agent_audit_results.json")
             print(f"  [--dump-audit-only 触发] 已导出待审核清单至临时目录: {pending_audit_file}")
             print(f"     请智能体调用 view_file 查验上述照片后，将审核结果写入: {results_file} 并重新执行。")
             return {"status": "paused_for_agent_audit", "pending_file": pending_audit_file, "ambiguous_count": len(ambiguous_items)}
+
+        # Agent-Native Zero-JEV Cognitive Handshake Protocol
+        if ambiguous_items and not args.skip_agent_audit:
+            is_zero_jev = not (audit_mgr.jev_client and getattr(audit_mgr.jev_client, "is_ready", lambda: False)())
+            crit_display = criteria or template or "目标场所准入标准"
+            print("\n" + "=" * 70)
+            print("[AGENT_ACTION_REQUIRED] 需要智能体原生认知研判介入 (Zero-API Native Reasoning)")
+            print("=" * 70)
+            if is_zero_jev:
+                print("检测到当前未配置 JEV API Key，系统启动零成本原生智能体握手协议：")
+            else:
+                print("检测到部分候选场所属于复合业态或处于置信度模糊区间，需要智能体复核：")
+            print(f"  - 待审候选场所总数: {len(ambiguous_items)} 家")
+            print(f"  - 自解释工单数据包: {pending_audit_file}")
+            print(f"  - 实拍照片存储目录: {audit_mgr.photos_dir}")
+            print(f"  - 目标研判准入标准: {crit_display}")
+            print("\n【智能体执行协议 (Mandatory Action Protocol)】")
+            print("1. 宿主智能体请调用 read_file / view_file 查看上述工单与对应门面/设施实拍照片；")
+            print("2. 基于您的原生商业认知与多模态视觉能力进行研判，将裁决结果写入:")
+            print(f"   {results_file}")
+            print("3. 写入完成后，请智能体自动重新执行当前命令以闭环生成最终 30 站路线！")
+            print("   (切勿在未完成研判前直接向人类交付半成品路线或结束对话)")
+            print("=" * 70 + "\n")
+
+            if __name__ == "__main__":
+                sys.exit(2)
+            else:
+                return {
+                    "status": "waiting_agent_audit",
+                    "pending_file": pending_audit_file,
+                    "results_file": results_file,
+                    "ambiguous_count": len(ambiguous_items)
+                }
+
+        if ambiguous_items:
+            print(f"  [智能体多模态提示] 发现 {len(ambiguous_items)} 家存疑场所已降级为本地规则兜底 (已启用 --skip-agent-audit)")
 
         verified_candidates = []
         for c in filtered_candidates:

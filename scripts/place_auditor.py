@@ -124,10 +124,29 @@ class PlaceAuditManager:
                             if pid:
                                 self.agent_decisions[pid] = item
                     elif isinstance(data, dict):
-                        self.agent_decisions = data
+                        if "decisions" in data and isinstance(data["decisions"], list):
+                            for item in data["decisions"]:
+                                pid = item.get("placeId") or item.get("id")
+                                if pid:
+                                    self.agent_decisions[pid] = item
+                        elif "candidates" in data and isinstance(data["candidates"], list):
+                            for item in data["candidates"]:
+                                pid = item.get("placeId") or item.get("id")
+                                if pid:
+                                    self.agent_decisions[pid] = item
+                        else:
+                            for k, v in data.items():
+                                if isinstance(v, dict):
+                                    item = dict(v)
+                                    item.setdefault("placeId", k)
+                                    self.agent_decisions[k] = item
                 print(f"  [Info] Loaded {len(self.agent_decisions)} agent-verified multimodal decisions from {self.results_file}")
             except Exception as e:
                 print(f"  [Notice] Note: Could not parse {self.results_file}: {e}")
+
+    def has_unresolved_audits(self) -> bool:
+        """Returns True if there are ambiguous/unverified candidates that still need agent review."""
+        return len(self.ambiguous_candidates) > 0
 
     def export_pending_audit(
         self,
@@ -135,9 +154,10 @@ class PlaceAuditManager:
         download_images: bool = True
     ) -> Tuple[str, List[Dict]]:
         """
-        Filters candidates to find ONLY ambiguous / borderline candidates needing
-        Multimodal Agent visual verification (P between 0.30 and 0.85).
-        Downloads venue photos to local disk so the Agent can inspect them with view_file.
+        Filters candidates to identify candidates needing Agent Cognitive & Multimodal verification.
+        - When Jev is available: captures borderline cases (0.30 < P < 0.85 or NEED_MULTIMODAL_INSPECTION).
+        - When Jev is absent (Zero-JEV Mode): captures all unverified candidates needing domain criteria judgment.
+        Downloads venue photos to local disk and exports a prompt-ready self-contained packet.
         """
         os.makedirs(self.photos_dir, exist_ok=True)
         ambiguous_items = []
@@ -149,6 +169,10 @@ class PlaceAuditManager:
 
             # Skip if already verified by agent
             if pid in self.agent_decisions:
+                continue
+
+            # Skip if explicitly pinned by user
+            if c.get("_is_pinned"):
                 continue
 
             # Check Jev status
@@ -169,10 +193,16 @@ class PlaceAuditManager:
                     if tier_status == "NEED_MULTIMODAL_INSPECTION" or (tier_status is None and 0.30 < conf < 0.85):
                         needs_audit = True
             else:
-                ptype = (c.get("primaryType") or "").lower()
-                # Ambiguous when type contains mixed offerings
-                if any(k in ptype for k in ("store", "shop", "service", "center", "hall", "studio", "specialty")):
+                # Zero-JEV Mode (Host Agent Native Cognitive Reasoning)
+                # If specific criteria, keywords, or non-general template are requested,
+                # invoke the host agent to evaluate the candidates accurately.
+                if self.criteria or self.keywords or (self.template and self.template != "general"):
                     needs_audit = True
+                else:
+                    ptype = (c.get("primaryType") or "").lower()
+                    # Ambiguous when type contains mixed or generic offerings
+                    if any(k in ptype for k in ("store", "shop", "service", "center", "hall", "studio", "specialty", "point_of_interest")):
+                        needs_audit = True
 
             if needs_audit:
                 photo_urls = c.get("photo_urls", [])
@@ -198,8 +228,29 @@ class PlaceAuditManager:
                 })
 
         self.ambiguous_candidates = ambiguous_items
+        packet = {
+            "protocol_version": "1.0",
+            "task_description": "请作为资深商业勘测专家，评估以下候选场所是否符合目标准入标准 (请结合场所名称、业态类型、官方简介、精选评价及下载的实拍门面/设施照片进行研判)。",
+            "target_criteria": self.criteria or f"Category / Template: {self.template}",
+            "candidate_count": len(ambiguous_items),
+            "candidates": ambiguous_items,
+            "items_to_audit": ambiguous_items,
+            "expected_output_schema": {
+                "placeId_example": {
+                    "is_match": True,
+                    "matched_features": ["feature 1", "feature 2"],
+                    "rationale": "简要陈述研判依据与实拍照片观察结论"
+                }
+            },
+            "instructions_for_agent": [
+                "1. 查验 candidates 中每个场所的名称、简介、评价及 local_photo_paths (实拍照片)。",
+                "2. 判断该场所是否真正符合 target_criteria (区分专业核心业态 vs 附带次要业务)。",
+                "3. 将最终研判裁决写入同目录下的 agent_audit_results.json (支持字典格式或列表格式)。",
+                "4. 写入完成后，请重新执行原命令以闭环生成最终路线！"
+            ]
+        }
         with open(self.pending_file, "w", encoding="utf-8") as f:
-            json.dump(ambiguous_items, f, ensure_ascii=False, indent=2)
+            json.dump(packet, f, ensure_ascii=False, indent=2)
 
         return self.pending_file
 
@@ -221,7 +272,7 @@ class PlaceAuditManager:
             self.stats["agent_cached"] += 1
             decision = self.agent_decisions[pid]
             is_match = bool(decision.get("is_match", True))
-            features = decision.get("features") or ["agent-multimodal-verified"]
+            features = decision.get("matched_features") or decision.get("features") or ["agent-multimodal-verified"]
             rationale = decision.get("rationale") or decision.get("notes") or "Verified by AI Agent multimodal image inspection"
             return is_match, 1.0, features, rationale
 

@@ -1589,6 +1589,126 @@ class TestUniversalPlaceScout(unittest.TestCase):
         is_m, _, _, _ = semantic_entity_match(candidate, records, known_chains=chains)
         self.assertFalse(is_m)
 
+class TestAgentNativeZeroJevHandshake(unittest.TestCase):
+    def test_pending_audit_packet_format(self):
+        import tempfile, json
+        from place_auditor import PlaceAuditManager
+
+        with tempfile.TemporaryDirectory() as td:
+            mgr = PlaceAuditManager(audit_dir=td, criteria="artisan espresso and pour-over", template="coffee")
+            candidates = [
+                {
+                    "placeId": "c1",
+                    "name": "Roaster Cafe",
+                    "primaryType": "cafe",
+                    "address": "123 Main St",
+                    "editorialSummary": "Craft roastery",
+                    "reviews_text": "Best pour over in town",
+                    "photo_urls": []
+                }
+            ]
+            pending_file = mgr.export_pending_audit(candidates, download_images=False)
+            self.assertTrue(os.path.exists(pending_file))
+
+            with open(pending_file, "r", encoding="utf-8") as f:
+                packet = json.load(f)
+
+            self.assertEqual(packet["protocol_version"], "1.0")
+            self.assertIn("task_description", packet)
+            self.assertEqual(packet["target_criteria"], "artisan espresso and pour-over")
+            self.assertEqual(packet["candidate_count"], 1)
+            self.assertIn("candidates", packet)
+            self.assertEqual(packet["candidates"][0]["placeId"], "c1")
+            self.assertIn("expected_output_schema", packet)
+            self.assertIn("instructions_for_agent", packet)
+
+    def test_zero_jev_captures_criteria_candidates(self):
+        import tempfile
+        from place_auditor import PlaceAuditManager
+
+        with tempfile.TemporaryDirectory() as td:
+            mgr = PlaceAuditManager(audit_dir=td, criteria="commercial auto detailing", template="auto")
+            candidates = [
+                {"placeId": "a1", "name": "Speedy Auto Detailing", "primaryType": "car_wash"},
+                {"placeId": "a2", "name": "Pinned P", "primaryType": "car_wash", "_is_pinned": True}
+            ]
+            mgr.export_pending_audit(candidates, download_images=False)
+            self.assertTrue(mgr.has_unresolved_audits())
+            # Pinned place should be skipped, only a1 needs audit
+            self.assertEqual(len(mgr.ambiguous_candidates), 1)
+            self.assertEqual(mgr.ambiguous_candidates[0]["placeId"], "a1")
+
+    def test_agent_decisions_dict_of_dicts_format(self):
+        import tempfile, json
+        from place_auditor import PlaceAuditManager
+
+        with tempfile.TemporaryDirectory() as td:
+            res_file = os.path.join(td, "agent_audit_results.json")
+            with open(res_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "shop_abc": {
+                        "is_match": True,
+                        "matched_features": ["specialty roaster", "pour-over bar"],
+                        "rationale": "Verified by agent inspection"
+                    }
+                }, f)
+
+            mgr = PlaceAuditManager(audit_dir=td)
+            self.assertIn("shop_abc", mgr.agent_decisions)
+            cand = {"placeId": "shop_abc", "name": "Shop ABC"}
+            is_m, conf, feats, rat = mgr.audit_place(cand)
+            self.assertTrue(is_m)
+            self.assertEqual(conf, 1.0)
+            self.assertIn("specialty roaster", feats)
+
+    def test_agent_decisions_wrapped_decisions_format(self):
+        import tempfile, json
+        from place_auditor import PlaceAuditManager
+
+        with tempfile.TemporaryDirectory() as td:
+            res_file = os.path.join(td, "agent_audit_results.json")
+            with open(res_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "decisions": [
+                        {
+                            "placeId": "shop_xyz",
+                            "is_match": False,
+                            "rationale": "Commercial chain without specialty equipment"
+                        }
+                    ]
+                }, f)
+
+            mgr = PlaceAuditManager(audit_dir=td)
+            self.assertIn("shop_xyz", mgr.agent_decisions)
+            cand = {"placeId": "shop_xyz", "name": "Shop XYZ"}
+            is_m, conf, _, rat = mgr.audit_place(cand)
+            self.assertFalse(is_m)
+            self.assertEqual(conf, 1.0)
+
+    def test_agent_decisions_list_format(self):
+        import tempfile, json
+        from place_auditor import PlaceAuditManager
+
+        with tempfile.TemporaryDirectory() as td:
+            res_file = os.path.join(td, "agent_audit_results.json")
+            with open(res_file, "w", encoding="utf-8") as f:
+                json.dump([
+                    {
+                        "placeId": "shop_list_1",
+                        "is_match": True,
+                        "matched_features": ["single-origin", "espresso"],
+                        "rationale": "Audited via agent list format"
+                    }
+                ], f)
+
+            mgr = PlaceAuditManager(audit_dir=td)
+            self.assertIn("shop_list_1", mgr.agent_decisions)
+            cand = {"placeId": "shop_list_1", "name": "Shop List 1"}
+            is_m, conf, feats, rat = mgr.audit_place(cand)
+            self.assertTrue(is_m)
+            self.assertEqual(conf, 1.0)
+            self.assertIn("single-origin", feats)
+
 if __name__ == "__main__":
     unittest.main()
 
