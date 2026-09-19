@@ -363,7 +363,10 @@ def main():
             departure_time=dep_time,
             filter_closed=not args.keep_closed,
             allow_dinner_only=args.allow_dinner_only or cfg.get("allow_dinner_only", False),
-            openrouter_api_key=openrouter_api_key
+            openrouter_api_key=openrouter_api_key,
+            place_types=place_types,
+            keywords=keywords,
+            locality=origin_address
         )
         filtered_candidates, filter_stats = r_filter.filter_places(raw_candidates)
         if filter_stats.get("mandatory_count", 0) > 0:

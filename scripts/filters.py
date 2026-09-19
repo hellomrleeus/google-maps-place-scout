@@ -36,43 +36,70 @@ def normalize_text(text: str) -> str:
     cleaned = re.sub(r"[^\w\s\u4e00-\u9fa5]", " ", text.lower())
     return re.sub(r"\s+", " ", cleaned).strip()
 
-def extract_brand_tokens(name: str) -> Set[str]:
-    """Extracts distinctive brand words ignoring common place generic words, business categories, and city names."""
-    stop_words = {
-        # Generic venue & business words
-        "restaurant", "bar", "kitchen", "grill", "inc", "ltd", "corp",
-        "food", "foods", "express", "cafe", "takeout", "eatery", "house", "shop", "store",
-        "plaza", "centre", "center", "mall", "station", "unit", "hwy", "highway",
-        "lounge", "bistro", "diner", "place", "original", "famous", "best",
-        "studio", "clinic", "salon", "services", "service", "spa", "auto", "repair",
-        "gym", "fitness", "hotel", "motel", "club", "lab", "dental", "care", "mart",
-        # Region & geographic words
-        "markham", "toronto", "scarborough", "york", "north", "south", "east", "west",
-        "downtown", "richmond", "hill", "vaughan", "mississauga", "ontario", "canada", "gta",
-        # Chinese stop words
-        "店", "分店", "快餐", "小吃", "北约克", "士嘉堡", "万锦", "多伦多", "会所", "中心", "工作室", "馆"
-    }
-    clean = name.lower()
-    clean = re.sub(r"\bbb\.?q\b", "bbq", clean)
-    clean = clean.replace("&", "and")
-    tokens = re.findall(r"[a-z0-9\u4e00-\u9fa5]+", clean)
-    return {t for t in tokens if t not in stop_words and len(t) > 2}
+# 1. Global legal, corporate, and business entity suffixes (Domain-agnostic)
+LEGAL_ENTITY_SUFFIXES = {
+    # English corporate, legal & organizational forms
+    "inc", "incorporated", "ltd", "limited", "corp", "corporation",
+    "llc", "co", "company", "holdings", "group", "enterprises",
+    "international", "intl", "branch", "associates", "partners",
+    "services", "solutions",
+    # Chinese corporate forms
+    "有限公司", "有限责任", "股份", "集团", "企业", "分公司", "办事处", "总店", "分店"
+}
 
-def extract_address_features(address: str) -> Tuple[Optional[str], Set[str]]:
-    """Extracts street number and distinctive road tokens."""
+GENERIC_PLACE_FILLER_WORDS = {
+    # Non-distinctive structural or filler terms
+    "the", "and", "original", "famous", "official", "premier", "elite",
+    "center", "centre", "plaza", "square", "station", "place"
+}
+
+STANDARD_ROAD_AND_UNIT_STOPWORDS = {
+    # Road types & designations
+    "rd", "road", "st", "street", "ave", "avenue", "dr", "drive", "blvd", "boulevard",
+    "way", "lane", "ln", "court", "ct", "cres", "crescent", "place", "pl", "pkwy", "parkway",
+    "terrace", "terr", "trail", "trl", "circle", "cir", "path", "walk", "row", "square", "sq",
+    "highway", "hwy", "route", "rte", "expressway", "freeway", "turnpike",
+    # Commercial unit & building descriptors
+    "unit", "ste", "suite", "apt", "apartment", "room", "rm", "floor", "fl", "level", "lvl",
+    "building", "bldg", "plaza", "centre", "center", "mall", "tower", "block", "box", "po"
+}
+
+def extract_brand_tokens(name: str, dynamic_stopwords: Optional[Set[str]] = None) -> Set[str]:
+    """
+    Extracts distinctive brand words ignoring domain-agnostic corporate suffixes,
+    filler words, and runtime-injected dynamic category/locality stopwords.
+    Does NOT contain hardcoded dining, food, or regional city keywords.
+    """
+    if not name:
+        return set()
+
+    clean = name.lower()
+    # Normalize acronyms with dots between word characters (e.g. 'bb.q' -> 'bbq', 'u.s.a' -> 'usa')
+    clean = re.sub(r"(?<=\w)\.(?=\w)", "", clean)
+    clean = re.sub(r"[^\w\s\u4e00-\u9fa5]", " ", clean)
+    clean = clean.replace("&", " and ")
+
+    tokens = re.findall(r"[a-z0-9\u4e00-\u9fa5]+", clean)
+    effective_stops = set(LEGAL_ENTITY_SUFFIXES) | set(GENERIC_PLACE_FILLER_WORDS)
+    if dynamic_stopwords:
+        effective_stops.update(s.lower().strip() for s in dynamic_stopwords if s and s.strip())
+
+    return {t for t in tokens if t not in effective_stops and len(t) > 2}
+
+def extract_address_features(address: str, dynamic_stopwords: Optional[Set[str]] = None) -> Tuple[Optional[str], Set[str]]:
+    """Extracts street number and distinctive road tokens without hardcoding specific cities."""
     if not address:
         return None, set()
     clean = address.lower().replace(",", " ")
     num_match = re.search(r"\b(\d{1,6})\b", clean)
     street_num = num_match.group(1) if num_match else None
 
-    stop_addr = {
-        "rd", "road", "st", "street", "ave", "avenue", "dr", "drive", "blvd",
-        "unit", "suite", "hwy", "highway", "canada", "on", "north", "york",
-        "toronto", "markham", "scarborough", "richmond", "hill", "mississauga"
-    }
+    effective_stops = set(STANDARD_ROAD_AND_UNIT_STOPWORDS)
+    if dynamic_stopwords:
+        effective_stops.update(s.lower().strip() for s in dynamic_stopwords if s and s.strip())
+
     tokens = re.findall(r"[a-z0-9]+", clean)
-    keywords = {t for t in tokens if t not in stop_addr and len(t) > 2 and not t.isdigit()}
+    keywords = {t for t in tokens if t not in effective_stops and len(t) > 2 and not t.isdigit()}
     return street_num, keywords
 
 try:
@@ -80,15 +107,35 @@ try:
 except ImportError:
     JevDecisionClient = None
 
-KNOWN_CHAINS = {
-    "popeyes", "kfc", "mcdonalds", "wendys", "subway", "starbucks",
-    "timhortons", "anytimefitness", "goodlife", "jiffylube"
-}
+def detect_multi_location_brands(records: List[Dict], dynamic_stopwords: Optional[Set[str]] = None) -> Set[str]:
+    """
+    Dynamically identifies multi-location brands (chains) by detecting brand tokens
+    that appear across multiple distinct addresses or coordinate locations in reference records.
+    """
+    brand_locations: Dict[str, Set[str]] = {}
+    for r in records:
+        name = r.get("name") or ""
+        tokens = extract_brand_tokens(name, dynamic_stopwords)
+        addr = r.get("address") or ""
+        num, road_tokens = extract_address_features(addr, dynamic_stopwords)
+        loc_key = f"{num or ''}_{'_'.join(sorted(road_tokens))}" if (num or road_tokens) else addr.strip()
+        if not loc_key:
+            continue
+        for t in tokens:
+            if len(t) < 4:
+                continue
+            if t not in brand_locations:
+                brand_locations[t] = set()
+            brand_locations[t].add(loc_key)
+
+    return {b for b, locs in brand_locations.items() if len(locs) >= 2}
 
 def semantic_entity_match(
     candidate: Dict,
     reference_items: List[Dict],
-    jev_client: Optional[Any] = None
+    jev_client: Optional[Any] = None,
+    dynamic_stopwords: Optional[Set[str]] = None,
+    known_chains: Optional[Set[str]] = None
 ) -> Tuple[bool, float, str, Optional[Dict]]:
     """
     Tier 2: Model-driven semantic entity matching for places.
@@ -100,8 +147,8 @@ def semantic_entity_match(
     """
     c_name = candidate.get("name", "")
     c_addr = candidate.get("address", "")
-    c_brand_tokens = extract_brand_tokens(c_name)
-    c_num, c_addr_tokens = extract_address_features(c_addr)
+    c_brand_tokens = extract_brand_tokens(c_name, dynamic_stopwords)
+    c_num, c_addr_tokens = extract_address_features(c_addr, dynamic_stopwords)
 
     if not c_brand_tokens:
         return False, 0.0, "", None
@@ -109,7 +156,7 @@ def semantic_entity_match(
     for ref in reference_items:
         r_name = ref.get("name", "")
         r_addr = ref.get("address", "")
-        r_brand_tokens = extract_brand_tokens(r_name)
+        r_brand_tokens = extract_brand_tokens(r_name, dynamic_stopwords)
 
         common_brands = c_brand_tokens & r_brand_tokens
         if not common_brands:
@@ -126,9 +173,9 @@ def semantic_entity_match(
                     continue
 
         # 2. Local heuristic rule fallback
-        r_num, r_addr_tokens = extract_address_features(r_addr)
+        r_num, r_addr_tokens = extract_address_features(r_addr, dynamic_stopwords)
         shared_brand_name = list(common_brands)[0]
-        is_chain = any(b in KNOWN_CHAINS for b in common_brands)
+        is_chain = bool(known_chains and any(b in known_chains for b in common_brands))
 
         # Case A: Same brand and exact same street number (Definite match)
         if c_num and r_num and c_num == r_num:
@@ -152,7 +199,12 @@ def semantic_entity_match(
                     ref
                 )
 
-        # Case C: Independent unique brands
+        # Case C: If both records have street numbers and they conflict without road overlap,
+        # they are definitely at different physical locations
+        if c_num and r_num and c_num != r_num and not (c_addr_tokens & r_addr_tokens):
+            continue
+
+        # Case D: Independent unique brands (when no street number conflict exists)
         if not is_chain:
             for b in common_brands:
                 if len(b) >= 6:
@@ -181,6 +233,10 @@ class PlaceFilter:
         typesafe_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         jev_client: Optional[Any] = None,
+        place_types: Optional[List[str]] = None,
+        keywords: Optional[List[str]] = None,
+        dynamic_stopwords: Optional[Any] = None,
+        locality: Optional[str] = None,
         **kwargs
     ):
         self.contracted_path = contracted_path or ""
@@ -200,6 +256,35 @@ class PlaceFilter:
         self.departure_time = departure_time
         self.filter_closed = filter_closed
         self.allow_dinner_only = allow_dinner_only
+
+        # Dynamic context stopwords (derived from active categories, keywords, and geography)
+        self.dynamic_stopwords: Set[str] = set()
+        if dynamic_stopwords:
+            self.dynamic_stopwords.update(s.lower().strip() for s in dynamic_stopwords if s and str(s).strip())
+        if place_types:
+            for pt in place_types:
+                for w in str(pt).replace("_", " ").split():
+                    if len(w) > 2:
+                        self.dynamic_stopwords.add(w.lower())
+        if keywords:
+            for kw in keywords:
+                for w in str(kw).replace("_", " ").split():
+                    if len(w) > 2:
+                        self.dynamic_stopwords.add(w.lower())
+        if self.exclude_regions:
+            for reg in self.exclude_regions:
+                for w in reg.split():
+                    if len(w) > 2:
+                        self.dynamic_stopwords.add(w.lower())
+        if self.include_regions:
+            for reg in self.include_regions:
+                for w in reg.split():
+                    if len(w) > 2:
+                        self.dynamic_stopwords.add(w.lower())
+        if locality and str(locality).strip():
+            for w in str(locality).strip().split():
+                if len(w) > 2:
+                    self.dynamic_stopwords.add(w.lower())
 
         # Initialize Jev Decision Client
         self.jev_client = jev_client
@@ -312,6 +397,14 @@ class PlaceFilter:
             if name:
                 self.visited_names.add(name)
 
+        # Dynamically detect multi-location brands (chains) across exclusion data
+        all_ref_data = self.contracted_data + self.visited_data
+        self.chain_brands: Set[str] = detect_multi_location_brands(all_ref_data, dynamic_stopwords=self.dynamic_stopwords)
+        if self.exclude_places:
+            for ep in self.exclude_places:
+                tokens = extract_brand_tokens(ep, dynamic_stopwords=self.dynamic_stopwords)
+                self.chain_brands.update(tokens)
+
     def is_contracted(self, place: Dict) -> Tuple[bool, str]:
         """Returns: (is_contracted, match_reason)"""
         pid = place.get("placeId") or place.get("id", "")
@@ -326,7 +419,13 @@ class PlaceFilter:
         if norm_name and norm_name in self.contracted_names:
             return True, f"[精确匹配] 名称完全一致: {norm_name}"
 
-        matched, conf, rationale, ref = semantic_entity_match(place, self.contracted_data, jev_client=self.jev_client)
+        matched, conf, rationale, ref = semantic_entity_match(
+            place,
+            self.contracted_data,
+            jev_client=self.jev_client,
+            dynamic_stopwords=self.dynamic_stopwords,
+            known_chains=self.chain_brands
+        )
         if matched and conf >= 0.70:
             ref_name = ref.get("name", "") if ref else ""
             return True, f"[模型语义对齐] 与签约商家 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"
@@ -347,7 +446,13 @@ class PlaceFilter:
         if norm_name and norm_name in self.visited_names:
             return True, f"[精确匹配] 名称完全一致: {norm_name}"
 
-        matched, conf, rationale, ref = semantic_entity_match(place, self.visited_data, jev_client=self.jev_client)
+        matched, conf, rationale, ref = semantic_entity_match(
+            place,
+            self.visited_data,
+            jev_client=self.jev_client,
+            dynamic_stopwords=self.dynamic_stopwords,
+            known_chains=self.chain_brands
+        )
         if matched and conf >= 0.70:
             ref_name = ref.get("name", "") if ref else ""
             return True, f"[模型语义对齐] 与拜访记录 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"

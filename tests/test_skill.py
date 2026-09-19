@@ -1502,6 +1502,62 @@ class TestUniversalPlaceScout(unittest.TestCase):
         self.assertEqual(accepted[0]["name"], "Tesla Supercharger")
         self.assertEqual(stats["excluded_manual"], 1)
 
+    def test_domain_agnostic_brand_tokens_and_legal_suffixes(self):
+        from filters import extract_brand_tokens
+
+        # Dental clinic
+        tokens_dental = extract_brand_tokens("Apex Pediatric Dentistry Inc")
+        self.assertNotIn("inc", tokens_dental)
+        self.assertIn("apex", tokens_dental)
+
+        # Auto repair
+        tokens_auto = extract_brand_tokens("Ceramic Pro Detailing LLC")
+        self.assertNotIn("llc", tokens_auto)
+        self.assertIn("ceramic", tokens_auto)
+
+        # Chinese corporate entity
+        tokens_cn = extract_brand_tokens("极光智能汽车服务有限公司")
+        self.assertNotIn("有限公司", tokens_cn)
+
+        # Dot acronym normalization
+        tokens_acronym = extract_brand_tokens("B.B.Q & Wings Express")
+        self.assertIn("bbq", tokens_acronym)
+
+    def test_dynamic_stopwords_injection(self):
+        from filters import extract_brand_tokens, PlaceFilter
+
+        # Without dynamic stopwords, 'dentistry' is retained as a token
+        raw_tokens = extract_brand_tokens("Bright Smile Dentistry")
+        self.assertIn("dentistry", raw_tokens)
+
+        # When 'dentistry' is injected dynamically as a category stopword, it is cleanly removed
+        dyn_tokens = extract_brand_tokens("Bright Smile Dentistry", dynamic_stopwords={"dentistry"})
+        self.assertNotIn("dentistry", dyn_tokens)
+        self.assertIn("bright", dyn_tokens)
+        self.assertIn("smile", dyn_tokens)
+
+        # Test PlaceFilter automatic dynamic stopwords ingestion from place_types
+        pf = PlaceFilter(place_types=["dental_clinic", "dentist"])
+        self.assertIn("dental", pf.dynamic_stopwords)
+        self.assertIn("dentist", pf.dynamic_stopwords)
+
+    def test_dynamic_multi_location_chain_detection(self):
+        from filters import detect_multi_location_brands, semantic_entity_match
+
+        records = [
+            {"name": "Alpha Auto Detailing", "address": "100 Main St, Suite 1"},
+            {"name": "Alpha Auto Detailing", "address": "500 Broadway Ave"},
+            {"name": "Beta Unique Studio", "address": "300 Queen St"}
+        ]
+        chains = detect_multi_location_brands(records)
+        self.assertIn("alpha", chains)
+        self.assertNotIn("beta", chains)
+
+        # Verify different branch of Alpha Detailing is not excluded when address conflicts
+        candidate = {"name": "Alpha Auto Detailing", "address": "900 Industrial Rd"}
+        is_m, _, _, _ = semantic_entity_match(candidate, records, known_chains=chains)
+        self.assertFalse(is_m)
+
 if __name__ == "__main__":
     unittest.main()
 
