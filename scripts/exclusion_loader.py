@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Source Exclusion Loader and Schema Normalizer for Daily Restaurant Lead Scout.
+Multi-Source Exclusion Loader and Schema Normalizer for Google Maps Place Scout.
 Handles ingestion of arbitrary/heterogeneous merchant data from:
 1. REST API endpoints (HTTP/HTTPS GET returning JSON).
 2. Local Excel spreadsheets (.xlsx, .xls).
@@ -22,8 +22,8 @@ from typing import List, Dict, Any, Optional
 # Fuzzy header mapping dictionaries
 FIELD_SYNONYMS = {
     "name": [
-        "name", "restaurant", "store", "shop", "title", "merchant", "client", "business",
-        "餐馆", "商家", "店名", "商户", "商户名", "门店名称", "客户名称", "客户", "名称", "招牌", "餐厅名称"
+        "name", "restaurant", "store", "shop", "title", "merchant", "client", "business", "place",
+        "餐馆", "商家", "店名", "商户", "商户名", "门店名称", "客户名称", "客户", "名称", "招牌", "餐厅名称", "场所", "场所名称", "地点", "机构名称"
     ],
     "phone": [
         "phone", "tel", "mobile", "telephone", "contact", "phone_number", "contact_number",
@@ -53,10 +53,20 @@ def match_field_role(header_text: str) -> Optional[str]:
     if not normalized_header:
         return None
 
+    # Phase 1: Exact match across all fields (e.g. 'placeid' must match place_id, not 'place' in name)
+    for canonical_field, synonyms in FIELD_SYNONYMS.items():
+        for syn in synonyms:
+            if normalized_header == clean_key(syn):
+                return canonical_field
+
+    # Phase 2: Substring match with ID guard
     for canonical_field, synonyms in FIELD_SYNONYMS.items():
         for syn in synonyms:
             norm_syn = clean_key(syn)
-            if normalized_header == norm_syn or norm_syn in normalized_header:
+            if norm_syn and len(norm_syn) >= 2 and norm_syn in normalized_header:
+                # Avoid 'place' or 'store' matching 'placeid' or 'store_id'
+                if "id" in normalized_header and canonical_field != "place_id":
+                    continue
                 return canonical_field
     return None
 
@@ -114,7 +124,7 @@ def load_from_http_api(url: str, timeout: int = 10) -> List[Dict[str, Any]]:
         if isinstance(data, list):
             return [normalize_raw_record(x) for x in data if isinstance(x, dict)]
         if isinstance(data, dict):
-            for candidate_key in ["data", "items", "records", "merchants", "restaurants", "results"]:
+            for candidate_key in ["data", "items", "records", "places", "merchants", "restaurants", "results"]:
                 if candidate_key in data and isinstance(data[candidate_key], list):
                     return [normalize_raw_record(x) for x in data[candidate_key] if isinstance(x, dict)]
             # If dictionary with single object
@@ -184,7 +194,7 @@ def load_from_json_file(filepath: str) -> List[Dict[str, Any]]:
             if isinstance(data, list):
                 return [normalize_raw_record(x) for x in data if isinstance(x, dict)]
             if isinstance(data, dict):
-                for candidate_key in ["data", "items", "records", "merchants", "restaurants", "results"]:
+                for candidate_key in ["data", "items", "records", "places", "merchants", "restaurants", "results"]:
                     if candidate_key in data and isinstance(data[candidate_key], list):
                         return [normalize_raw_record(x) for x in data[candidate_key] if isinstance(x, dict)]
                 return [normalize_raw_record(data)]

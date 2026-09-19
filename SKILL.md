@@ -72,7 +72,7 @@ flowchart LR
 >      {
 >        "questions": [
 >          {
->            "question": "Daily Restaurant Lead Scout is installed! How would you like to configure it?",
+>            "question": "Google Maps Place Scout is installed! How would you like to configure it?",
 >            "options": [
 >              "(Recommended) I will provide my Google Maps API Key and TypeSafe API Key (or paste in chat)",
 >              "Skip configuration for now (I will configure it later)"
@@ -218,61 +218,83 @@ The skill exclusively synchronizes to Google Sheets via **Google Apps Script Web
        ss.setActiveSheet(sheet);
        ss.moveActiveSheet(1);
 
-       var startRow = 1;
-       if (data.master_nav_url) {
-         sheet.getRange(1, 1).setFormula('=HYPERLINK("' + data.master_nav_url + '", "Google Maps Route Navigation")');
-         sheet.getRange(1, 1, 1, 6).merge()
-           .setBackground("#E8F0FE")
-           .setFontColor("#1A73E8")
-           .setFontWeight("bold")
-           .setFontSize(10)
-           .setHorizontalAlignment("center")
-           .setVerticalAlignment("middle");
-         sheet.setRowHeight(1, 34);
-         startRow = 2;
-       }
+        var startRow = 1;
+        var headers = data.headers || ["No.", "Place Name", "Address", "Navigation Address", "Opening Hours", "Phone", "Match Evidence"];
+        if (data.master_nav_url) {
+          sheet.getRange(1, 1).setFormula('=HYPERLINK("' + data.master_nav_url + '", "Google Maps Route Navigation")');
+          sheet.getRange(1, 1, 1, headers.length).merge()
+            .setBackground("#E8F0FE")
+            .setFontColor("#1A73E8")
+            .setFontWeight("bold")
+            .setFontSize(10)
+            .setHorizontalAlignment("center")
+            .setVerticalAlignment("middle");
+          sheet.setRowHeight(1, 34);
+          startRow = 2;
+        }
 
-       var headers = data.headers || ["No.", "Place Name", "Address", "Opening Hours", "Phone", "Match Evidence"];
-       var headerRange = sheet.getRange(startRow, 1, 1, headers.length);
-       headerRange.setValues([headers]);
-       headerRange.setBackground("#1A73E8")
-         .setFontColor("#FFFFFF")
-         .setFontWeight("bold")
-         .setFontSize(11)
-         .setHorizontalAlignment("center")
-         .setVerticalAlignment("middle");
-       sheet.setRowHeight(startRow, 38);
-       sheet.setFrozenRows(startRow);
+        var headerRange = sheet.getRange(startRow, 1, 1, headers.length);
+        headerRange.setValues([headers]);
+        headerRange.setBackground("#1A73E8")
+          .setFontColor("#FFFFFF")
+          .setFontWeight("bold")
+          .setFontSize(11)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle");
+        sheet.setRowHeight(startRow, 38);
+        sheet.setFrozenRows(startRow);
 
-       if (data.rows && data.rows.length > 0) {
-         var dataStartRow = startRow + 1;
-         var numRows = data.rows.length;
-         var dataRange = sheet.getRange(dataStartRow, 1, numRows, headers.length);
-         dataRange.setValues(data.rows);
-         dataRange.setFontSize(10).setVerticalAlignment("middle");
+        if (data.rows && data.rows.length > 0) {
+          var dataStartRow = startRow + 1;
+          var numRows = data.rows.length;
+          var dataRange = sheet.getRange(dataStartRow, 1, numRows, headers.length);
+          dataRange.setValues(data.rows);
+          dataRange.setFontSize(10).setVerticalAlignment("middle");
 
-         for (var r = 0; r < numRows; r++) {
-           var rowNum = dataStartRow + r;
-           sheet.setRowHeight(rowNum, 28);
-           var rowBg = (r % 2 === 0) ? "#FFFFFF" : "#F8FAFC";
-           sheet.getRange(rowNum, 1, 1, headers.length).setBackground(rowBg);
-         }
+          for (var r = 0; r < numRows; r++) {
+            var rowNum = dataStartRow + r;
+            sheet.setRowHeight(rowNum, 28);
+            var rowBg = (r % 2 === 0) ? "#FFFFFF" : "#F8FAFC";
+            sheet.getRange(rowNum, 1, 1, headers.length).setBackground(rowBg);
+          }
 
-         dataRange.setBorder(true, true, true, true, true, true, "#E2E8F0", SpreadsheetApp.BorderStyle.SOLID);
-         sheet.getRange(dataStartRow, 1, numRows, 1).setHorizontalAlignment("center");
-         sheet.getRange(dataStartRow, 2, numRows, 1).setFontWeight("bold");
-         sheet.getRange(dataStartRow, 4, numRows, 1).setHorizontalAlignment("center");
-         sheet.getRange(dataStartRow, 5, numRows, 1).setHorizontalAlignment("center");
-         sheet.getRange(dataStartRow, 3, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
-         sheet.getRange(dataStartRow, 6, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
-       }
+          dataRange.setBorder(true, true, true, true, true, true, "#E2E8F0", SpreadsheetApp.BorderStyle.SOLID);
+          sheet.getRange(dataStartRow, 1, numRows, 1).setHorizontalAlignment("center");
+          sheet.getRange(dataStartRow, 2, numRows, 1).setFontWeight("bold");
+          sheet.getRange(dataStartRow, 3, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+          sheet.getRange(dataStartRow, 4, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+          sheet.getRange(dataStartRow, 5, numRows, 1).setHorizontalAlignment("center");
+          sheet.getRange(dataStartRow, 6, numRows, 1).setHorizontalAlignment("center");
+          sheet.getRange(dataStartRow, 7, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
 
-       sheet.setColumnWidth(1, 60);
-       sheet.setColumnWidth(2, 220);
-       sheet.setColumnWidth(3, 340);
-       sheet.setColumnWidth(4, 200);
-       sheet.setColumnWidth(5, 140);
-       sheet.setColumnWidth(6, 380);
+          var navCol = 4;
+          var mergeStart = 0;
+          for (var r = 0; r < numRows; r++) {
+            var curNav = data.rows[r][navCol - 1];
+            var nextNav = (r + 1 < numRows) ? data.rows[r + 1][navCol - 1] : null;
+            if (curNav && curNav === nextNav) {
+              // Same navigation address
+            } else {
+              if (r > mergeStart) {
+                var startRowIdx = dataStartRow + mergeStart;
+                var mergeHeight = r - mergeStart + 1;
+                sheet.getRange(startRowIdx, navCol, mergeHeight, 1).merge()
+                  .setVerticalAlignment("middle")
+                  .setHorizontalAlignment("left")
+                  .setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+              }
+              mergeStart = r + 1;
+            }
+          }
+        }
+
+        sheet.setColumnWidth(1, 60);
+        sheet.setColumnWidth(2, 220);
+        sheet.setColumnWidth(3, 300);
+        sheet.setColumnWidth(4, 300);
+        sheet.setColumnWidth(5, 180);
+        sheet.setColumnWidth(6, 130);
+        sheet.setColumnWidth(7, 360);
 
        return ContentService.createTextOutput(JSON.stringify({ status: "success", sheet_name: sheet.getName(), sheet_url: ss.getUrl() })).setMimeType(ContentService.MimeType.JSON);
      } catch (err) {
@@ -367,7 +389,7 @@ When interacting with the user, the agent automatically maps natural language in
 | "规划今天的路线" (未指明具体时间) | `--visit-date today --departure-time "<current_HH:MM>"` (对齐当前本地时间，防止过期) |
 | "规划明天去多伦多东边的路线" (未指明具体时间) | `--visit-date tomorrow --direction east` (默认 09:30) |
 | "下周一上午 10 点从大本营出发" | `--visit-date <YYYY-MM-DD> --departure-time 10:00` |
-| "在 Fairview Mall 附近找 30 家油炸店" | `--origin "Fairview Mall" --direction radial --radius 6.0` |
+| "在 Fairview Mall 附近找 30 家店" | `--origin "Fairview Mall" --direction radial --radius 6.0` |
 | "在曼哈顿寻找 20 家精品独立手冲咖啡馆" | `--origin "Times Square, New York" --place-types cafe --template coffee --count 20 --direction radial --radius 5.0` |
 | "规划沿走廊拜访 15 家汽修与汽车贴膜店" | `--place-types car_repair,car_wash --template auto --criteria "auto detailing, PPF, ceramic coating" --count 15 --direction east` |
 | "在市中心附近搜集 25 家健身房与搏击馆" | `--place-types gym --template fitness --criteria "commercial gym, CrossFit, boxing studio" --count 25 --direction south` |
@@ -378,9 +400,9 @@ When interacting with the user, the agent automatically maps natural language in
 | "从北约克向东扫，但不要去士嘉堡" | `--direction east --exclude-regions "scarborough"` |
 | "只在万锦范围内找，15公里以内" | `--include-regions "markham" --max-depth 15.0` |
 | "避开 Downtown，在北约克找" | `--exclude-regions "downtown" --include-regions "north york"` |
-| "不要去 bb.q Chicken 或者 Popeyes" | `--exclude-restaurants "bb.q Chicken, Popeyes"` |
-| "带上或者必须拜访 OLD.K CHICKEN" | `--include-restaurants "OLD.K CHICKEN BURGERS"` |
-| "晚上去巡检，把仅夜宵营业的酒吧也带上" | `--allow-dinner-only` |
+| "不要去 Shell 或者 Esso" | `--exclude-places "Shell, Esso"` |
+| "带上或者必须拜访 Pilot Coffee Roasters" | `--include-places "Pilot Coffee Roasters"` |
+| "晚上去巡检，把仅夜间营业的场所也带上" | `--allow-dinner-only` |
 | "不用检查开门时间，所有店都排进来" | `--keep-closed` |
 
 ---
@@ -402,7 +424,7 @@ This skill is architected around a **Tripartite Collaboration Framework (人 - �
 |                             AI AGENT (The Conductor)                         |
 |   - Interprets human intent and maps parameters silently                    |
 |   - Dispatches Python execution tools in the background                     |
-|   - Steps in as Multimodal Culinary Judge on ambiguous candidate photos     |
+|   - Steps in as Multimodal Visual Judge on ambiguous candidate photos       |
 |   - Delivers executive in-chat reports and navigation links to human        |
 +-----------------------------------------------------------------------------+
                |                                              ^
@@ -412,7 +434,7 @@ This skill is architected around a **Tripartite Collaboration Framework (人 - �
 |                          PYTHON EXECUTION ENGINE                            |
 |   - Google Maps Places API exploration & corridor probe deployment          |
 |   - Tier 1 Jev text triage: fast pass (P >= 0.85), fast reject (P <= 0.30)  |
-|   - Downloads candidate dish photos for borderline cases (0.30 < P < 0.85)  |
+|   - Downloads candidate facility/storefront photos for borderline cases      |
 |   - Monotonic Anti-Shuttle Corridor Slice Sweep geometry routing            |
 |   - Pure English 7-column Excel & Google Sheets webhook data persistence    |
 +-----------------------------------------------------------------------------+
@@ -420,9 +442,9 @@ This skill is architected around a **Tripartite Collaboration Framework (人 - �
 
 ### Cascaded Multimodal Inspection Protocol
 1. **Fast Text Triage**:
-   During Step 3, Python and Jev (`jev-latest` via TypeSafe System One API) resolve 80%+ of obvious candidates in milliseconds (e.g. Popeyes or Juice Bars).
+   During Step 3, Python and Jev (`jev-latest` via TypeSafe System One API) resolve 80%+ of obvious candidates in milliseconds (e.g. obvious category matches or completely unrelated businesses).
 2. **Selective Ambiguity Isolation**:
-   Only borderline candidates ($0.30 < P < 0.85$, such as izakayas, bistros, Asian cafes) have their food and interior photos downloaded to:
+   Only borderline candidates ($0.30 < P < 0.85$, such as hybrid venues, multi-service centers, newly opened places) have their facility and storefront photos downloaded to:
    `<temp_dir>/audit/photos/<place_id>_0.jpg`
    and indexed in `pending_agent_audit.json`.
 3. **Agent Native Vision Intervention**:

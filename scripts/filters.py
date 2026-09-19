@@ -247,10 +247,8 @@ class PlaceFilter:
         self.include_regions = [r.lower().strip() for r in (include_regions or []) if r and r.strip()]
         
         # Support direct place exclusion/pinning list
-        raw_exclude = exclude_places if exclude_places is not None else kwargs.get("exclude_restaurants")
-        self.exclude_places = [r.lower().strip() for r in (raw_exclude or []) if r and r.strip()]
-        raw_mandatory = mandatory_places if mandatory_places is not None else kwargs.get("mandatory_restaurants")
-        self.mandatory_places = [r.lower().strip() for r in (raw_mandatory or []) if r and r.strip()]
+        self.exclude_places = [r.lower().strip() for r in (exclude_places or []) if r and r.strip()]
+        self.mandatory_places = [r.lower().strip() for r in (mandatory_places or []) if r and r.strip()]
         
         self.visit_date = visit_date
         self.departure_time = departure_time

@@ -1,1 +1,1 @@
-# Daily Restaurant Lead Scout Package
+# Google Maps Place Scout Package

@@ -161,10 +161,10 @@ class DirectionalRouter:
         self.max_depth_km = max_depth_km
         self.slice_length_km = slice_length_km
 
-    def filter_corridor_candidates(self, restaurants: List[Dict]) -> List[Dict]:
-        """Filters restaurants to only those within the forward travel corridor."""
+    def filter_corridor_candidates(self, places: List[Dict]) -> List[Dict]:
+        """Filters places to only those within the forward travel corridor."""
         corridor_list = []
-        for r in restaurants:
+        for r in places:
             lat = float(r.get("latitude") or 0)
             lng = float(r.get("longitude") or 0)
             if lat == 0 or lng == 0:
@@ -181,7 +181,7 @@ class DirectionalRouter:
 
         return corridor_list
 
-    def plan_unidirectional_route(self, restaurants: List[Dict], target_count: int = 30) -> List[Dict]:
+    def plan_unidirectional_route(self, places: List[Dict], target_count: int = 30) -> List[Dict]:
         """
         Anti-Shuttle ("不要折返跑") Corridor Slice & Cluster Sweep:
         1. Guarantees inclusion of any user-pinned mandatory stops.
@@ -189,13 +189,13 @@ class DirectionalRouter:
         3. In each slice, visits local candidates via compact nearest-neighbor tour.
         4. Once a slice is cleared, proceeds strictly forward to the next slice with zero backward shuttling.
         """
-        candidates = self.filter_corridor_candidates(restaurants)
+        candidates = self.filter_corridor_candidates(places)
 
         # Expand corridor slightly if insufficient candidates
         if len(candidates) < target_count:
             relaxed_width = self.corridor_width_km * 1.6
             candidates = []
-            for r in restaurants:
+            for r in places:
                 lat = float(r.get("latitude") or 0)
                 lng = float(r.get("longitude") or 0)
                 if lat == 0 or lng == 0:
@@ -210,7 +210,7 @@ class DirectionalRouter:
         if not candidates:
             return []
 
-        # If candidates exceed target_count, prioritize retaining any pinned restaurants
+        # If candidates exceed target_count, prioritize retaining any pinned places
         if len(candidates) > target_count:
             pinned = [c for c in candidates if c.get("_is_pinned")]
             unpinned = [c for c in candidates if not c.get("_is_pinned")]
@@ -253,13 +253,13 @@ class DirectionalRouter:
 
         return two_opt_tour(ordered_route[:target_count], self.origin_lat, self.origin_lng, preserve_slices=True)
 
-    def plan_radial_route(self, restaurants: List[Dict], target_count: int = 30) -> List[Dict]:
+    def plan_radial_route(self, places: List[Dict], target_count: int = 30) -> List[Dict]:
         """
         Plans a compact cluster route around the anchor origin for '在XXXX附近找' scenarios.
         Filters by proximity to origin, guarantees pinned stops, then chains nearest neighbors outwards smoothly.
         """
         candidates = []
-        for r in restaurants:
+        for r in places:
             lat = float(r.get("latitude") or 0)
             lng = float(r.get("longitude") or 0)
             if lat == 0 or lng == 0:

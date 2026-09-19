@@ -650,7 +650,7 @@ def diagnose_error(error: Exception, context: Optional[Dict] = None) -> Tuple[st
         cause = "网络连接超时或无法连接至外部 Google 服务"
         advice = "请检查服务器公网连接或代理设置后重试。"
     elif "少于" in err_str or "不足" in err_str or "no candidates" in err_str:
-        cause = "当前走廊纵深内符合条件的油炸餐馆数量不足预设目标数"
+        cause = "当前走廊纵深内符合条件的场所数量不足预设目标数"
         advice = "建议增大走廊宽度（例如 `--corridor-width 6.0`）或加大探测纵深（例如 `--max-depth 35.0`）。"
         retry_cmd = f"python3 scripts/main.py --direction {direction} --corridor-width 6.0 --max-depth 35.0"
     else:

@@ -123,7 +123,7 @@ function doPost(e) {
       sheet.getRange(dataStartRow, 4, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP); // 导航地址自动换行
       sheet.getRange(dataStartRow, 5, numRows, 1).setHorizontalAlignment("center"); // 营业时间居中
       sheet.getRange(dataStartRow, 6, numRows, 1).setHorizontalAlignment("center"); // 电话居中
-      sheet.getRange(dataStartRow, 7, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP); // 油炸依据自动换行
+      sheet.getRange(dataStartRow, 7, numRows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP); // 判定依据自动换行
 
       // 5. 合并第 4 列（Navigation Address）中连续相同的导航地址单元格
       var navCol = 4;
@@ -149,12 +149,12 @@ function doPost(e) {
 
     // 6. 设置自适应列宽
     sheet.setColumnWidth(1, 60);   // 序号
-    sheet.setColumnWidth(2, 220);  // 餐馆名称
+    sheet.setColumnWidth(2, 220);  // 场所名称
     sheet.setColumnWidth(3, 300);  // 详细地址
     sheet.setColumnWidth(4, 300);  // 导航地址
     sheet.setColumnWidth(5, 180);  // 营业时间
     sheet.setColumnWidth(6, 130);  // 联系电话
-    sheet.setColumnWidth(7, 360);  // 油炸依据
+    sheet.setColumnWidth(7, 360);  // 判定依据
 
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",

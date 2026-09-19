@@ -78,23 +78,23 @@ sequenceDiagram
         Engine->>Jev: Tier 2 语义消歧 (比较商户名、商圈与已有签约/拜访记录)
         Jev-->>Engine: 判定同店概率 (识别连锁新分店不误杀，真实同实体彻底排除)
     end
-    Engine->>Engine: 营业状态守门 (排除永久停业、公休日与纯夜宵餐馆)
+    Engine->>Engine: 营业状态守门 (排除永久停业与公休日场所)
 
     %% 阶段 4: 级联主动研判与智能体多模态视觉
     Note over Engine, Agent: 阶段 4: 级联主动研判与智能体多模态视觉
-    Engine->>Jev: Tier 1 文本初筛 (评估 has_commercial_fryer 与用油等级)
+    Engine->>Jev: Tier 1 文本初筛 (评估业务实体、设施与服务准入)
     Jev-->>Engine: 返回决策置信度与类别 (DEFINITIVE_PASS / REJECT / AMBIGUOUS)
-    alt 高置信通过 (P >= 0.85，如炸鸡汉堡/Fish & Chips)
-        Engine->>Engine: 直接锁定为有效油炸商户 (零图像开销)
-    else 明确排除 (P <= 0.30，如鲜榨果汁/沙拉轻食)
+    alt 高置信通过 (P >= 0.85，明确符合准入条件的目标场所)
+        Engine->>Engine: 直接锁定为符合条件商户 (零图像开销)
+    else 明确排除 (P <= 0.30，明确不符的主营业务或非目标业态)
         Engine->>Engine: 直接剔除 (零图像开销)
-    else 模糊存疑 (0.30 < P < 0.85，如日式居酒屋/茶餐厅/Bistro)
-        Engine->>Maps: 仅拉取存疑商户的菜品与门头实拍图
+    else 模糊存疑 (0.30 < P < 0.85，如混合业态、复合门店、多服务场所)
+        Engine->>Maps: 仅拉取存疑商户的门头与实景照片
         Maps-->>Engine: 下载高清图片至临时目录 /photos/
         Engine->>Engine: 生成精简待审清单 (pending_agent_audit.json)
         Engine-->>Agent: 提报存疑商家照片本地路径
         Agent->>Agent: 触发原生多模态视觉介入 (调用内置 view_file 查验实拍图)
-        Note over Agent: 视觉识别起酥金黄质感、后厨炸炉、金属网篮
+        Note over Agent: 视觉识别门面招牌、专业设备设施、服务工位
         Agent->>Engine: 写入视觉研判裁定 (agent_audit_results.json)
         Engine->>Engine: 100% 最高优先级吸纳智能体视觉结论
     end
@@ -120,8 +120,8 @@ sequenceDiagram
 2. **多源异构数据消歧过滤 (Engine <-> CRM <-> Jev)**：
    系统对接企业既有的已签约客户库（`contracted_source`）与历史拜访库（`visited_source`）。先走 Place ID/电话硬匹配；遇同品牌分店或别名时，自动调用 Jev 决策模型进行语义级同店识别，既不漏掉可拜访的新分店，又彻底杜绝重复跑腿。
 3. **基于置信度的级联主动研判 (Engine <-> Jev <-> Agent Multimodal)**：
-   - 确定性高的商家（肯德基、纯沙拉吧）通过 Jev 文本分类在毫秒级快速决断；
-   - 处于模糊区间的商家（日式居酒屋、西式简餐 Bistro 等），Python 引擎自动拉取实拍图并派发工单，由**拥有原生多模态视觉的智能体（Agent）调用 `view_file` 肉眼查验后厨与菜品**，将研判结论回传闭环，无需引入任何第三方付费图像 API。
+   - 确定性高的商家（如完全吻合特征或纯无关业态）通过 Jev 文本分类在毫秒级快速决断；
+   - 处于模糊区间的商家（如复合门店、新开跨界场所等），Python 引擎自动拉取实拍图并派发工单，由**拥有原生多模态视觉的智能体（Agent）调用 `view_file` 肉眼查验门面招牌与专业设施**，将研判结论回传闭环，无需引入任何第三方付费图像 API。
 4. **防折返空间规划与云端落盘 (Engine <-> Sheet)**：
    Python 引擎执行沿进轴单向投影（Corridor Slice Sweep），将确认商户编排为不走回头路的高效路线，并一键推送到业务人员的在线 Google Sheet 与本地纯英文 Excel。
 
@@ -313,13 +313,13 @@ python3 scripts/main.py --origin "43.7615, -79.4111"
 python3 scripts/main.py --origin "https://maps.app.goo.gl/xxxxxx"
 ```
 
-### 4. 动态餐馆控制 (临时排除指定餐馆 / 强制带上必选餐馆)
+### 4. 动态场所控制 (临时排除指定场所 / 强制带上必选场所)
 ```bash
-# 排除特定餐馆 (支持模糊匹配和多店排除)
-python3 scripts/main.py --exclude-restaurants "bb.q Chicken, Popeyes"
+# 排除特定场所 (支持模糊匹配和多店排除)
+python3 scripts/main.py --exclude-places "Shell, Esso"
 
-# 必选并带上指定餐馆 (最高优先级，自动置顶保真并编排至行进路线中)
-python3 scripts/main.py --include-restaurants "OLD.K CHICKEN BURGERS"
+# 必选并带上指定场所 (最高优先级，自动置顶保真并编排至行进路线中)
+python3 scripts/main.py --include-places "Pilot Coffee Roasters"
 ```
 
 ### 5. 方向控制与地理范围约束 (走廊推进 / 辐射状就近搜索 / 区域禁行与圈定)
@@ -348,10 +348,10 @@ python3 scripts/main.py --visit-date tomorrow
 # 3. 指定任意日期的日历排程
 python3 scripts/main.py --visit-date 2026-09-20 --departure-time 09:00
 
-# 4. 允许纯夜宵/晚间酒吧 (夜间巡检模式)
+# 4. 允许纯夜间营业场所 (夜间巡检模式)
 python3 scripts/main.py --visit-date today --allow-dinner-only
 
-# 5. 禁用开业状态校验 (保留公休与停业餐馆)
+# 5. 禁用开业状态校验 (保留公休与停业场所)
 python3 scripts/main.py --keep-closed
 
 # 6. 默认自适应模式：15:00 之前运行自动规划【当日】，15:00 之后运行自动规划【次日】

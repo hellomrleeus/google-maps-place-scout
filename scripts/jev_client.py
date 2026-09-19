@@ -348,7 +348,7 @@ class JevDecisionClient:
         reference: Dict[str, Any]
     ) -> Optional[Tuple[bool, float, str, str]]:
         """
-        Uses Jev to determine whether a candidate restaurant matches an excluded reference merchant.
+        Uses Jev to determine whether a candidate place matches an excluded reference merchant.
         Returns: (is_match, confidence, rationale, match_type) or None if Jev unavailable.
         """
         c_name = candidate.get("name", "")
@@ -361,14 +361,14 @@ class JevDecisionClient:
         r_phone = reference.get("phone", "")
 
         state = (
-            f"Candidate Restaurant: Name='{c_name}', Address='{c_addr}', Phone='{c_phone}', Type='{c_type}'.\n"
+            f"Candidate Place: Name='{c_name}', Address='{c_addr}', Phone='{c_phone}', Type='{c_type}'.\n"
             f"Reference Exclusion Merchant: Name='{r_name}', Address='{r_addr}', Phone='{r_phone}'."
         )
 
         questions = {
             "is_same_entity": {
                 "type": "noul",
-                "instructions": "Is the candidate restaurant the exact same physical store, branch, or business entity as the reference merchant?",
+                "instructions": "Is the candidate place the exact same physical store, branch, or business entity as the reference merchant?",
                 "criteria": {
                     "true": "Exact same physical business and location, or same branch accounting for name variations / translations",
                     "false": "Different location, different branch of a chain, or unrelated business"
