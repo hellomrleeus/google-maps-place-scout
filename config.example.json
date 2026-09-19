@@ -10,6 +10,9 @@
     "longitude": -79.4111
   },
   "target_count": 30,
+  "place_types": ["restaurant"],
+  "template": "fried_food",
+  "criteria": "",
   "corridor_settings": {
     "default_direction": "east",
     "corridor_width_km": 4.5,

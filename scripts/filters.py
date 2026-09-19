@@ -38,13 +38,15 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 def extract_brand_tokens(name: str) -> Set[str]:
-    """Extracts distinctive brand words ignoring common restaurant generic words, food types, and city names."""
+    """Extracts distinctive brand words ignoring common place generic words, business categories, and city names."""
     stop_words = {
         # Generic venue & business words
         "restaurant", "bar", "kitchen", "grill", "inc", "ltd", "corp",
-        "food", "foods", "express", "cafe", "takeout", "eatery", "house", "shop",
+        "food", "foods", "express", "cafe", "takeout", "eatery", "house", "shop", "store",
         "plaza", "centre", "center", "mall", "station", "unit", "hwy", "highway",
         "lounge", "bistro", "diner", "place", "original", "famous", "best",
+        "studio", "clinic", "salon", "services", "service", "spa", "auto", "repair",
+        "gym", "fitness", "hotel", "motel", "club", "lab", "dental", "care", "mart",
         # Generic food & cuisine categories
         "chicken", "wings", "burger", "burgers", "hotdog", "hotdogs", "dog", "dogs",
         "tacos", "taco", "pizza", "sushi", "noodle", "noodles", "rice", "fried",
@@ -55,7 +57,7 @@ def extract_brand_tokens(name: str) -> Set[str]:
         "markham", "toronto", "scarborough", "york", "north", "south", "east", "west",
         "downtown", "richmond", "hill", "vaughan", "mississauga", "ontario", "canada", "gta",
         # Chinese stop words
-        "餐馆", "餐厅", "美食", "店", "分店", "料理", "快餐", "小吃", "北约克", "士嘉堡", "万锦", "多伦多"
+        "餐馆", "餐厅", "美食", "店", "分店", "料理", "快餐", "小吃", "北约克", "士嘉堡", "万锦", "多伦多", "会所", "中心", "工作室"
     }
     clean = name.lower()
     clean = re.sub(r"\bbb\.?q\b", "bbq", clean)
@@ -180,6 +182,8 @@ class RestaurantFilter:
         include_regions: Optional[List[str]] = None,
         exclude_restaurants: Optional[List[str]] = None,
         mandatory_restaurants: Optional[List[str]] = None,
+        exclude_places: Optional[List[str]] = None,
+        mandatory_places: Optional[List[str]] = None,
         visit_date: str = "",
         departure_time: str = "09:30",
         filter_closed: bool = True,
@@ -195,8 +199,10 @@ class RestaurantFilter:
         self.visited_data = load_exclusion_source(visited_path) if visited_path else []
         self.exclude_regions = [r.lower().strip() for r in (exclude_regions or []) if r and r.strip()]
         self.include_regions = [r.lower().strip() for r in (include_regions or []) if r and r.strip()]
-        self.exclude_restaurants = [r.lower().strip() for r in (exclude_restaurants or []) if r and r.strip()]
-        self.mandatory_restaurants = [r.lower().strip() for r in (mandatory_restaurants or []) if r and r.strip()]
+        raw_exclude = exclude_places if exclude_places is not None else exclude_restaurants
+        self.exclude_restaurants = [r.lower().strip() for r in (raw_exclude or []) if r and r.strip()]
+        raw_mandatory = mandatory_places if mandatory_places is not None else mandatory_restaurants
+        self.mandatory_restaurants = [r.lower().strip() for r in (raw_mandatory or []) if r and r.strip()]
         self.visit_date = visit_date
         self.departure_time = departure_time
         self.filter_closed = filter_closed
@@ -485,4 +491,12 @@ class RestaurantFilter:
 
         stats["accepted_count"] = len(accepted)
         return accepted, stats
+
+    def filter_places(self, candidates: List[Dict]) -> Tuple[List[Dict], Dict]:
+        """Generic alias for filter_restaurants across all public place types."""
+        return self.filter_restaurants(candidates)
+
+# Export generic aliases for universal scouting
+PlaceFilter = RestaurantFilter
+check_place_open_status = check_restaurant_open_status
 

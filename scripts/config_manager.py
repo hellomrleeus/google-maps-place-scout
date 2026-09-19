@@ -263,8 +263,7 @@ def resolve_origin_input(origin_input: Optional[str], api_key: Optional[str] = N
             payload = {
                 "textQuery": raw,
                 "maxResultCount": 1,
-                "languageCode": "en",
-                "regionCode": "CA"
+                "languageCode": "en"
             }
             req_data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(req_url, data=req_data, method="POST")

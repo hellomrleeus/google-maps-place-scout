@@ -10,6 +10,7 @@ import math
 import time
 import gzip
 import http.client
+import re
 import urllib.request
 import urllib.error
 from typing import List, Dict, Optional, Tuple
@@ -104,10 +105,22 @@ def transform_google_place(p: Dict, matched_term: str = "", default_region: str 
             if ph_name:
                 photo_urls.append(f"https://places.googleapis.com/v1/{ph_name}/media?key={api_key}&maxHeightPx=600&maxWidthPx=600")
 
-    # Determine region from address
+    # Determine region dynamically from addressComponents or address text
     region = default_region
+    addr_components = p.get("addressComponents") or p.get("address_components") or []
+    extracted_locality = ""
+    if isinstance(addr_components, list):
+        for comp in addr_components:
+            types = comp.get("types", [])
+            if any(t in types for t in ("locality", "sublocality", "sublocality_level_1", "postal_town", "neighborhood")):
+                extracted_locality = comp.get("longText") or comp.get("shortText") or ""
+                if extracted_locality:
+                    break
+
     addr_lower = address.lower()
-    if "markham" in addr_lower:
+    if extracted_locality:
+        region = extracted_locality
+    elif "markham" in addr_lower:
         region = "Markham"
     elif "scarborough" in addr_lower:
         region = "Scarborough"
@@ -119,8 +132,18 @@ def transform_google_place(p: Dict, matched_term: str = "", default_region: str 
         region = "Mississauga"
     elif "vaughan" in addr_lower:
         region = "Vaughan"
-    elif "toronto" in addr_lower:
-        region = "Downtown Toronto"
+    elif "downtown" in addr_lower:
+        region = "Downtown"
+    else:
+        # Fallback: extract municipality from comma-separated address parts
+        parts = [pt.strip() for pt in address.split(",") if pt.strip()]
+        if len(parts) >= 3:
+            # e.g., "5000 Hwy 7, Markham, ON" -> "Markham"
+            candidate_part = parts[-3] if len(parts) >= 4 else parts[1]
+            # Strip digits/unit
+            cleaned_part = re.sub(r"^\d+\s*", "", candidate_part).strip()
+            if cleaned_part and len(cleaned_part) < 30:
+                region = cleaned_part
 
     business_status = (p.get("businessStatus") or p.get("business_status") or "OPERATIONAL").strip()
 
@@ -148,6 +171,8 @@ def transform_google_place(p: Dict, matched_term: str = "", default_region: str 
     }
 
 class PlacesSearcher:
+    transform_google_place = staticmethod(transform_google_place)
+
     def __init__(self, api_key: Optional[str] = None, referer: Optional[str] = None):
         self.api_key = api_key or os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
         self.referer = (referer or os.environ.get("GOOGLE_MAPS_API_REFERER", "")).strip()
@@ -155,7 +180,16 @@ class PlacesSearcher:
     def is_live_api_ready(self) -> bool:
         return bool(self.api_key and not self.api_key.startswith("YOUR_"))
 
-    def search_places_api(self, text_query: str, lat: float, lng: float, radius_meters: int = 5000, page_token: str = "") -> Dict:
+    def search_places_api(
+        self,
+        text_query: str,
+        lat: float,
+        lng: float,
+        radius_meters: int = 5000,
+        page_token: str = "",
+        included_type: Optional[str] = None,
+        region_code: Optional[str] = None
+    ) -> Dict:
         if not self.is_live_api_ready():
             raise ValueError("Google Maps API Key 未配置或无效。请先配置有效的 API Key: python3 scripts/main.py --configure --set-api-key <KEY>")
 
@@ -164,7 +198,6 @@ class PlacesSearcher:
             "textQuery": text_query,
             "maxResultCount": 20,
             "languageCode": "en",
-            "regionCode": "CA",
             "locationBias": {
                 "circle": {
                     "center": {
@@ -175,6 +208,10 @@ class PlacesSearcher:
                 }
             }
         }
+        if included_type:
+            payload["includedType"] = included_type
+        if region_code:
+            payload["regionCode"] = region_code
         if page_token:
             payload["pageToken"] = page_token
 
@@ -189,7 +226,7 @@ class PlacesSearcher:
             "places.regularOpeningHours,places.currentOpeningHours,places.businessStatus,"
             "places.primaryType,places.editorialSummary,places.reviews,places.nationalPhoneNumber,"
             "places.internationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri,"
-            "places.googleMapsUri,places.photos"
+            "places.googleMapsUri,places.photos,places.addressComponents"
         )
         req.add_header("X-Goog-FieldMask", field_mask)
         req.add_header("Accept-Encoding", "gzip, deflate")
@@ -212,22 +249,32 @@ class PlacesSearcher:
     def search_corridor_probes(
         self,
         probe_points: List[Tuple[float, float]],
-        keywords: List[str],
+        keywords: Optional[List[str]] = None,
         radius_meters: int = 5000,
         max_per_probe: int = 40,
-        target_count: int = 30
+        target_count: int = 30,
+        place_types: Optional[List[str]] = None,
+        region_code: Optional[str] = None
     ) -> List[Dict]:
         """
         Executes multi-hop corridor probing across a sequence of probe centers using Google Places API.
-        Returns deduplicated candidate restaurants in pure English format.
+        Returns deduplicated candidate places in pure English format.
         """
         if not self.is_live_api_ready():
             raise RuntimeError("Google Maps API Key 未配置或无效。请先配置有效的 API Key: python3 scripts/main.py --configure --set-api-key <KEY>")
 
         places_map = {}
         print(f"Querying Google Places API (New) across {len(probe_points)} corridor probes in English...")
-        selected_keywords = keywords[:4] if keywords else ["fried chicken", "chicken wings", "fish and chips"]
+        
+        # Determine search queries from keywords or place_types
+        if keywords and any(k.strip() for k in keywords):
+            selected_keywords = [k.strip() for k in keywords if k.strip()][:4]
+        elif place_types and any(t.strip() for t in place_types):
+            selected_keywords = [t.strip().replace("_", " ") for t in place_types if t.strip()][:4]
+        else:
+            selected_keywords = ["fried chicken", "chicken wings", "fish and chips"]
 
+        primary_type_filter = place_types[0].strip() if (place_types and len(place_types) == 1) else None
         min_pool_target = max(100, target_count * 4)
 
         for idx, (p_lat, p_lng) in enumerate(probe_points):
@@ -236,11 +283,23 @@ class PlacesSearcher:
 
             for kw in selected_keywords:
                 kw_clean = kw.strip()
-                kw_lower = kw_clean.lower()
-                has_suffix = any(term in kw_lower for term in ["restaurant", "food", "court", "dining", "kitchen", "cafe", "bakery", "eatery", "bar"])
-                query = kw_clean if has_suffix else f"{kw_clean} restaurant"
+                # If custom place types or custom keywords given, use query directly without appending 'restaurant'
+                if place_types or (keywords and keywords != ["fried chicken", "chicken wings", "fish and chips"]):
+                    query = kw_clean
+                else:
+                    kw_lower = kw_clean.lower()
+                    has_suffix = any(term in kw_lower for term in ["restaurant", "food", "court", "dining", "kitchen", "cafe", "bakery", "eatery", "bar"])
+                    query = kw_clean if has_suffix else f"{kw_clean} restaurant"
+
                 try:
-                    data = self.search_places_api(query, p_lat, p_lng, radius_meters=radius_meters)
+                    data = self.search_places_api(
+                        query,
+                        p_lat,
+                        p_lng,
+                        radius_meters=radius_meters,
+                        included_type=primary_type_filter,
+                        region_code=region_code
+                    )
                     places = data.get("places", [])
                     for p in places:
                         pid = p.get("id")

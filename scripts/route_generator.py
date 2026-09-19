@@ -46,7 +46,7 @@ def format_location_target(r: Dict) -> str:
         clean_addr = re.sub(r"\s+", " ", clean_addr).strip()
 
         if not clean_addr:
-            target = clean_name or "Toronto, ON"
+            target = clean_name or "Destination"
         elif clean_name.lower() in clean_addr.lower():
             target = clean_addr
         elif not clean_name:
@@ -54,8 +54,14 @@ def format_location_target(r: Dict) -> str:
         else:
             target = f"{clean_name}, {clean_addr}"
 
-    # Explicitly guarantee Canadian scope to prevent Google Maps from accidentally resolving to US places
-    if "canada" not in target.lower():
+    # For Canadian addresses without explicit country suffix, add Canada to assist Google Maps routing
+    is_canadian = bool(
+        re.search(r"\b[A-Za-z]\d[A-Za-z]\s*\d[A-Za-z]\d\b", target)
+        or re.search(r",\s*(ON|BC|AB|QC|MB|SK|NS|NB|NL|PE|YT|NT|NU)\b", target, re.IGNORECASE)
+        or "toronto" in target.lower()
+        or "canada" in target.lower()
+    )
+    if is_canadian and "canada" not in target.lower():
         target = f"{target}, Canada"
 
     return target
@@ -92,7 +98,7 @@ class RouteGenerator:
         visit_minutes: int = DEFAULT_VISIT_MINUTES
     ):
         self.origin_name = origin_name
-        self.origin_address = origin_address or "Toronto, ON"
+        self.origin_address = origin_address or ""
         self.origin_lat = origin_lat
         self.origin_lng = origin_lng
         self.departure_time_str = departure_time_str
@@ -130,7 +136,17 @@ class RouteGenerator:
         else:
             full_origin_str = f"{clean_name}, {clean_addr}" if clean_addr else clean_name
 
-        if "canada" not in full_origin_str.lower() and not re.match(r"^[+-]?\d+\.\d+,[+-]?\d+\.\d+$", full_origin_str):
+        if not full_origin_str:
+            full_origin_str = f"{self.origin_lat:.6f},{self.origin_lng:.6f}"
+
+        # If Canadian postal code or province is present, ensure country is clarified for Google Maps
+        is_origin_canadian = bool(
+            re.search(r"\b[A-Za-z]\d[A-Za-z]\s*\d[A-Za-z]\d\b", full_origin_str)
+            or re.search(r",\s*(ON|BC|AB|QC|MB|SK|NS|NB|NL|PE|YT|NT|NU)\b", full_origin_str, re.IGNORECASE)
+            or "toronto" in full_origin_str.lower()
+            or "canada" in full_origin_str.lower()
+        )
+        if is_origin_canadian and "canada" not in full_origin_str.lower() and not re.match(r"^[+-]?\d+\.\d+,[+-]?\d+\.\d+$", full_origin_str):
             full_origin_str = f"{full_origin_str}, Canada"
 
         # 1. Generate full 30-stop slash URL bypassing 10-stop limit (with deduplicated destinations)

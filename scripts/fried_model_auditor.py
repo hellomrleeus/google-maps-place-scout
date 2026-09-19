@@ -76,11 +76,17 @@ class AgentAuditManager:
         typesafe_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         jev_client: Optional[Any] = None,
+        criteria: str = "",
+        template: str = "general",
+        keywords: Optional[List[str]] = None,
         **kwargs
     ):
         self.audit_dir = audit_dir or get_temp_dir("audit")
         self.photos_dir = os.path.join(self.audit_dir, "photos")
         os.makedirs(self.photos_dir, exist_ok=True)
+        self.criteria = criteria or ""
+        self.template = template or "general"
+        self.keywords = keywords or []
 
         self.pending_file = os.path.join(self.audit_dir, "pending_agent_audit.json")
         self.results_file = os.path.join(self.audit_dir, "agent_audit_results.json")
@@ -162,7 +168,12 @@ class AgentAuditManager:
             jev_rationale = ""
 
             if self.jev_client and getattr(self.jev_client, "is_ready", lambda: False)():
-                jev_eval = self.jev_client.evaluate_fried_food(c)
+                if hasattr(self.jev_client, "evaluate_place"):
+                    jev_eval = self.jev_client.evaluate_place(c, criteria=self.criteria, template=self.template)
+                elif hasattr(self.jev_client, "evaluate_fried_food"):
+                    jev_eval = self.jev_client.evaluate_fried_food(c)
+                else:
+                    jev_eval = None
                 if jev_eval is not None:
                     _, conf, _, rat = jev_eval[:4]
                     tier_status = getattr(jev_eval, "tier_status", None)
@@ -174,9 +185,8 @@ class AgentAuditManager:
                     if tier_status == "NEED_MULTIMODAL_INSPECTION" or (tier_status is None and 0.30 < conf < 0.85):
                         needs_audit = True
             else:
-                # If no Jev, check if primary type is borderline (e.g. japanese, asian, bistro, bar)
                 ptype = (c.get("primaryType") or "").lower()
-                borderline_types = ["japanese", "ramen", "izakaya", "asian", "chinese", "bistro", "tapas", "bar", "cafe", "bakery"]
+                borderline_types = ["japanese", "ramen", "izakaya", "asian", "chinese", "bistro", "tapas", "bar", "cafe", "bakery", "studio", "repair", "clinic"]
                 if any(bt in ptype for bt in borderline_types):
                     needs_audit = True
 
@@ -210,15 +220,15 @@ class AgentAuditManager:
 
         return self.pending_file
 
-    def audit_restaurant(self, place: Dict) -> Tuple[bool, float, List[str], str]:
+    def audit_place(self, place: Dict) -> Tuple[bool, float, List[str], str]:
         """
-        Audits a restaurant using Cascaded Active Evaluation:
+        Audits a place against target criteria using Cascaded Active Evaluation:
         1. Agent pre-verified multimodal decisions take absolute precedence.
-        2. Tier 1: Jev Decision Model (~typesafe/jev-latest) for fast text classification.
+        2. Tier 1: Jev Decision Model (~typesafe/jev-latest) for fast typed evaluation.
            - If definitive pass (>=0.85): instant pass, no image needed.
            - If definitive reject (<=0.30): instant reject, no image needed.
            - If borderline (0.30 < P < 0.85): marked as ambiguous, uses agent decision if available.
-        3. Tier 3: Local high-recall heuristic fallback.
+        3. Tier 3: Local heuristic fallback.
         """
         self.stats["total"] += 1
         pid = place.get("placeId") or place.get("id", "")
@@ -227,35 +237,44 @@ class AgentAuditManager:
         if pid in self.agent_decisions:
             self.stats["agent_cached"] += 1
             decision = self.agent_decisions[pid]
-            is_fried = bool(decision.get("is_fried", True))
-            dishes = decision.get("fried_dishes") or decision.get("dishes") or ["agent-multimodal-verified"]
+            is_match = bool(decision.get("is_match", decision.get("is_fried", True)))
+            features = decision.get("features") or decision.get("fried_dishes") or decision.get("dishes") or ["agent-multimodal-verified"]
             rationale = decision.get("rationale") or decision.get("notes") or "Verified by AI Agent multimodal image inspection"
-            return is_fried, 1.0, dishes, rationale
+            return is_match, 1.0, features, rationale
 
         # 2. TypeSafe Jev Tiered Decision Model
         if self.jev_client and getattr(self.jev_client, "is_ready", lambda: False)():
-            jev_eval = self.jev_client.evaluate_fried_food(place)
+            if hasattr(self.jev_client, "evaluate_place"):
+                jev_eval = self.jev_client.evaluate_place(place, criteria=self.criteria, template=self.template)
+            elif hasattr(self.jev_client, "evaluate_fried_food"):
+                jev_eval = self.jev_client.evaluate_fried_food(place)
+            else:
+                jev_eval = None
             if jev_eval is not None:
-                is_fried, conf, dishes, rationale = jev_eval[:4]
+                is_match, conf, features, rationale = jev_eval[:4]
                 tier_status = getattr(jev_eval, "tier_status", None)
                 if not tier_status and len(jev_eval) >= 5:
                     tier_status = jev_eval[4]
 
                 if tier_status == "DEFINITIVE_PASS":
                     self.stats["jev_pass"] += 1
-                    return True, conf, dishes, rationale
+                    return True, conf, features, rationale
                 elif tier_status == "DEFINITIVE_REJECT":
                     self.stats["jev_reject"] += 1
-                    return False, conf, dishes, rationale
+                    return False, conf, features, rationale
                 else:
                     # Ambiguous candidate
                     self.stats["ambiguous_need_agent"] += 1
-                    amb_rationale = f"Jev borderline (Fryer prob {int(conf * 100)}%): Pending Agent multimodal image review"
-                    return is_fried, conf, dishes, amb_rationale
+                    amb_rationale = f"Jev borderline ({int(conf * 100)}%): Pending Agent multimodal image review"
+                    return is_match, conf, features, amb_rationale
 
         # 3. Local high-recall heuristic fallback
         self.stats["heuristic"] += 1
         return self._heuristic_audit(place)
+
+    def audit_restaurant(self, place: Dict) -> Tuple[bool, float, List[str], str]:
+        """Backward compatibility alias for audit_place."""
+        return self.audit_place(place)
 
     def _heuristic_audit(self, place: Dict) -> Tuple[bool, float, List[str], str]:
         name = place.get("name", "")
@@ -265,22 +284,43 @@ class AgentAuditManager:
         reviews = place.get("reviews_text", "")
 
         haystack = f"{name} {primary_type} {summary} {' '.join(categories)} {reviews}".lower()
-        matched = []
 
-        for p in FRIED_DISH_PATTERNS:
-            if p in haystack:
-                matched.append(p)
+        # Custom keywords or criteria matching
+        target_terms = []
+        if self.keywords:
+            target_terms.extend([kw.lower().strip() for kw in self.keywords if kw.strip()])
+        if self.criteria:
+            target_terms.extend([term.lower().strip() for term in re.split(r"[,;/\s]+", self.criteria) if len(term.strip()) > 2])
 
-        fryer_heavy_types = [
-            "fast_food_restaurant", "hamburger_restaurant", "american_restaurant",
-            "japanese_restaurant", "korean_restaurant", "chicken_restaurant",
-            "seafood_restaurant", "bar_and_grill", "pub"
-        ]
-        is_fryer_type = any(t in primary_type.lower() for t in fryer_heavy_types)
+        if target_terms:
+            matched = [t for t in target_terms if t in haystack]
+            if matched:
+                return True, 0.90, list(set(matched)), f"Matched target criteria terms: {', '.join(matched[:3])}"
+            # If no keywords matched, check if primary type or category has any overlap
+            if any(t in primary_type.lower() for t in target_terms):
+                return True, 0.80, ["category match"], f"Category ({primary_type}) matches requested service/establishment"
+            if self.template not in ("fried_food", "fried"):
+                return False, 0.20, [], f"Did not match target criteria or keywords ({self.template})"
 
-        if matched:
-            return True, 0.95, list(set(matched)), f"Detected fried dishes in menu/reviews: {', '.join(matched[:3])}"
-        elif is_fryer_type:
-            return True, 0.80, ["commercial fryer expected"], f"Category ({primary_type}) standardly operates commercial fryers"
-        else:
-            return False, 0.30, [], "No fried food items identified"
+        # If fried food template, fallback to fried dish patterns
+        if self.template in ("fried_food", "fried") or not target_terms:
+            matched = [p for p in FRIED_DISH_PATTERNS if p in haystack]
+            fryer_heavy_types = [
+                "fast_food_restaurant", "hamburger_restaurant", "american_restaurant",
+                "japanese_restaurant", "korean_restaurant", "chicken_restaurant",
+                "seafood_restaurant", "bar_and_grill", "pub"
+            ]
+            is_fryer_type = any(t in primary_type.lower() for t in fryer_heavy_types)
+
+            if matched:
+                return True, 0.95, list(set(matched)), f"Detected fried dishes in menu/reviews: {', '.join(matched[:3])}"
+            elif is_fryer_type:
+                return True, 0.80, ["commercial fryer expected"], f"Category ({primary_type}) standardly operates commercial fryers"
+            elif self.template in ("fried_food", "fried"):
+                return False, 0.30, [], "No fried food items identified"
+
+        return True, 0.75, ["operational establishment"], f"Establishment active ({primary_type or 'business'})"
+
+# Backward compatibility alias
+PlaceAuditor = AgentAuditManager
+

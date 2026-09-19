@@ -50,6 +50,16 @@ EXPORT_HEADERS = [
     "Fried Food Evidence"
 ]
 
+UNIVERSAL_HEADERS = [
+    "No.",
+    "Place Name",
+    "Address",
+    "Navigation Address",
+    "Opening Hours",
+    "Phone",
+    "Match Evidence"
+]
+
 def clean_address_to_english(address: str) -> str:
     if not address:
         return ""
@@ -129,7 +139,14 @@ def canonicalize_navigation_address(address: str) -> str:
     addr = re.sub(r"^\s*,\s*|\s*,\s*$", "", addr)
     addr = re.sub(r"\s+", " ", addr).strip()
 
-    if addr and "canada" not in addr.lower():
+    # For Canadian addresses without explicit country suffix, add Canada to assist Google Maps routing
+    is_canadian = bool(
+        re.search(r"\b[A-Za-z]\d[A-Za-z]\s*\d[A-Za-z]\d\b", addr)
+        or re.search(r",\s*(ON|BC|AB|QC|MB|SK|NS|NB|NL|PE|YT|NT|NU)\b", addr, re.IGNORECASE)
+        or "toronto" in addr.lower()
+        or "canada" in addr.lower()
+    )
+    if is_canadian and "canada" not in addr.lower():
         addr = f"{addr}, Canada"
 
     return addr
@@ -310,9 +327,9 @@ def map_stop_to_columns(stop: Dict, idx: int) -> List:
     if not phone or phone in ("无", "未知", "未提供"):
         phone = "None"
 
-    # Fried food audit rationale / evidence
+    # Audit rationale / evidence
     rationale = stop.get("_audit_rationale") or stop.get("audit_rationale")
-    dishes = stop.get("_fried_dishes") or stop.get("fried_dishes") or []
+    dishes = stop.get("_matched_features") or stop.get("_fried_dishes") or stop.get("fried_dishes") or []
     clean_rationale = normalize_rationale_to_english(rationale, dishes)
 
     return [
@@ -329,16 +346,27 @@ def map_stop_to_columns(stop: Dict, idx: int) -> List:
 map_stop_to_5_columns = map_stop_to_columns
 
 class SheetExporter:
-    def __init__(self, output_dir: Optional[str] = None):
+    def __init__(
+        self,
+        output_dir: Optional[str] = None,
+        headers: Optional[List[str]] = None,
+        template: str = ""
+    ):
         self.output_dir = output_dir or get_user_cache_dir("routes")
         os.makedirs(self.output_dir, exist_ok=True)
+        if headers:
+            self.headers = headers
+        elif template and template != "fried_food":
+            self.headers = UNIVERSAL_HEADERS
+        else:
+            self.headers = EXPORT_HEADERS
 
     def export_csv(self, stops: List[Dict], filename: str) -> str:
         stops = cluster_navigation_addresses(stops)
         filepath = os.path.join(self.output_dir, filename)
         with open(filepath, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(EXPORT_HEADERS)
+            writer.writerow(self.headers)
             for idx, s in enumerate(stops):
                 writer.writerow(map_stop_to_columns(s, idx))
         return filepath
@@ -360,7 +388,7 @@ class SheetExporter:
         # Title styling (A1:G1 across 7 columns)
         ws.merge_cells("A1:G1")
         title_cell = ws["A1"]
-        title_cell.value = f"Daily Restaurant Field Sales Route ({len(stops)} Confirmed Stops)"
+        title_cell.value = f"Daily Public Place Field Route ({len(stops)} Confirmed Stops)"
         title_cell.font = Font(name="Arial", size=14, bold=True, color="1E3A8A")
         title_cell.alignment = Alignment(horizontal="left", vertical="center")
 
@@ -387,7 +415,7 @@ class SheetExporter:
 
         # Row 4: Header (7 columns)
         ws.row_dimensions[4].height = 28
-        for col_num, h_text in enumerate(EXPORT_HEADERS, start=1):
+        for col_num, h_text in enumerate(self.headers, start=1):
             cell = ws.cell(row=4, column=col_num, value=h_text)
             cell.font = header_font
             cell.fill = header_fill
@@ -563,7 +591,7 @@ class SheetExporter:
             payload = {
                 "master_nav_url": master_nav_url,
                 "sheet_name": sheet_name,
-                "headers": EXPORT_HEADERS,
+                "headers": self.headers,
                 "rows": [map_stop_to_columns(s, idx) for idx, s in enumerate(stops or [])]
             }
             req = urllib.request.Request(

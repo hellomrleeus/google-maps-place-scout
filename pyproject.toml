@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "daily-restaurant-lead-scout"
+name = "google-maps-place-scout"
 version = "1.0.0"
-description = "Autonomous Restaurant Lead Scout & Unidirectional Route Planner Skill"
+description = "Universal Google Maps Place Scout & Unidirectional Corridor Planner Skill"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
@@ -13,4 +13,5 @@ dependencies = [
 ]
 
 [project.scripts]
+place-scout = "scripts.main:main"
 restaurant-scout = "scripts.main:main"

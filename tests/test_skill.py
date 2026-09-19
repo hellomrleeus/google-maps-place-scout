@@ -984,24 +984,24 @@ class TestAdHocRestaurantExclusionAndPinning(unittest.TestCase):
 
         # 2. Test simulating an installation inside user home (~/.gemini/skills/...)
         home_dir = os.path.realpath(os.path.expanduser("~"))
-        simulated_home_skill = os.path.join(home_dir, ".gemini", "skills", "daily-restaurant-lead-scout")
+        simulated_home_skill = os.path.join(home_dir, ".gemini", "skills", "google-maps-place-scout")
         simulated_root = find_project_root(start_dir=simulated_home_skill)
         # Should NOT treat ~ as a project root
         self.assertNotEqual(simulated_root, home_dir)
 
         # 3. Test simulating Antigravity workspace structure (<workspace>/.agents/skills/<name>)
         fake_workspace = "/fake/workspace/my_project"
-        simulated_agents_skill = os.path.join(fake_workspace, ".agents", "skills", "daily-restaurant-lead-scout")
+        simulated_agents_skill = os.path.join(fake_workspace, ".agents", "skills", "google-maps-place-scout")
         detected_root = find_project_root(start_dir=simulated_agents_skill)
         self.assertEqual(detected_root, fake_workspace)
 
         # 4. Test simulating nested wrappers (<workspace>/.gemini/antigravity/skills/<name>)
-        simulated_nested_skill = os.path.join(fake_workspace, ".gemini", "antigravity", "skills", "daily-restaurant-lead-scout")
+        simulated_nested_skill = os.path.join(fake_workspace, ".gemini", "antigravity", "skills", "google-maps-place-scout")
         detected_nested_root = find_project_root(start_dir=simulated_nested_skill)
         self.assertEqual(detected_nested_root, fake_workspace)
 
         # 5. Test simulating global install inside ~/.agents/skills (should NOT treat home as project root)
-        simulated_global_agents = os.path.join(home_dir, ".agents", "skills", "daily-restaurant-lead-scout")
+        simulated_global_agents = os.path.join(home_dir, ".agents", "skills", "google-maps-place-scout")
         self.assertNotEqual(find_project_root(start_dir=simulated_global_agents), home_dir)
 
 class TestJevIntegration(unittest.TestCase):
@@ -1296,6 +1296,225 @@ class TestDecoupledSearchAndBugFixes(unittest.TestCase):
         has_suffix = any(term in kw_lower for term in ["restaurant", "food", "court", "dining", "kitchen", "cafe", "bakery", "eatery", "bar"])
         query = kw_clean if has_suffix else f"{kw_clean} restaurant"
         self.assertEqual(query, "fried chicken restaurant")
+
+class TestUniversalPlaceScout(unittest.TestCase):
+    def test_build_criteria_spec_presets_and_custom(self):
+        from jev_client import build_criteria_spec
+
+        # Test fried_food preset
+        spec_fried = build_criteria_spec(template="fried_food")
+        self.assertEqual(spec_fried["decision_field"], "has_commercial_fryer")
+        self.assertIn("fryer", spec_fried["system_prompt"].lower())
+
+        # Test coffee preset
+        spec_coffee = build_criteria_spec(template="coffee")
+        self.assertEqual(spec_coffee["decision_field"], "has_commercial_espresso")
+        self.assertIn("espresso", spec_coffee["criteria_description"].lower())
+
+        # Test auto preset
+        spec_auto = build_criteria_spec(template="auto")
+        self.assertEqual(spec_auto["decision_field"], "provides_auto_service")
+
+        # Test fitness preset
+        spec_fit = build_criteria_spec(template="fitness")
+        self.assertEqual(spec_fit["decision_field"], "has_fitness_facilities")
+
+        # Test custom criteria
+        custom_crit = "Verify if this clinic provides pediatric dental surgery"
+        spec_custom = build_criteria_spec(criteria=custom_crit)
+        self.assertEqual(spec_custom["decision_field"], "target_match")
+        self.assertEqual(spec_custom["criteria_description"], custom_crit)
+
+    def test_evaluate_place_with_mock_client(self):
+        from jev_client import JevDecisionClient, JevMatchResult
+
+        class MockUniversalJev(JevDecisionClient):
+            def __init__(self):
+                self.api_key = "MOCK_KEY"
+            def is_ready(self):
+                return True
+            def evaluate_place(self, place, criteria="", template="general", criteria_spec=None):
+                pname = place.get("name", "").lower()
+                if "espresso" in pname or "coffee" in pname:
+                    return JevMatchResult(
+                        True, 0.95,
+                        ["La Marzocco Espresso Machine", "Pour-over bar"],
+                        "Verified specialty coffee equipment",
+                        tier_status="DEFINITIVE_PASS"
+                    )
+                return JevMatchResult(
+                    False, 0.10,
+                    [],
+                    "No specialty coffee service detected",
+                    tier_status="DEFINITIVE_REJECT"
+                )
+
+        client = MockUniversalJev()
+        cafe = {"id": "c1", "name": "Artisan Coffee Roasters", "primaryType": "cafe"}
+        res = client.evaluate_place(cafe, template="coffee")
+        self.assertTrue(res.is_match)
+        self.assertTrue(res.is_fried)  # Backward compat alias
+        self.assertEqual(res.confidence, 0.95)
+        self.assertIn("Pour-over bar", res.features)
+        self.assertEqual(res.tier_status, "DEFINITIVE_PASS")
+
+        convenience = {"id": "c2", "name": "Corner Grocery Mart", "primaryType": "convenience_store"}
+        res_neg = client.evaluate_place(convenience, template="coffee")
+        self.assertFalse(res_neg.is_match)
+        self.assertEqual(res_neg.tier_status, "DEFINITIVE_REJECT")
+
+    def test_places_searcher_dynamic_region_extraction(self):
+        from places_searcher import PlacesSearcher
+        searcher = PlacesSearcher(api_key="TEST_KEY")
+
+        # 1. New York place with locality in addressComponents
+        raw_ny = {
+            "id": "places/ny_001",
+            "displayName": {"text": "Joe's Coffee"},
+            "formattedAddress": "141 Waverly Pl, New York, NY 10014, USA",
+            "location": {"latitude": 40.7336, "longitude": -74.0003},
+            "addressComponents": [
+                {"longText": "141", "types": ["street_number"]},
+                {"longText": "Waverly Place", "types": ["route"]},
+                {"longText": "Manhattan", "types": ["sublocality_level_1", "sublocality"]},
+                {"longText": "New York", "types": ["locality", "political"]},
+                {"longText": "New York", "types": ["administrative_area_level_1"]},
+                {"longText": "United States", "types": ["country"]}
+            ]
+        }
+        trans_ny = searcher.transform_google_place(raw_ny)
+        self.assertIn(trans_ny["region"], ["Manhattan", "New York"])
+        self.assertEqual(trans_ny["name"], "Joe's Coffee")
+
+        # 2. Tokyo place with sublocality/locality
+        raw_tokyo = {
+            "id": "places/tokyo_001",
+            "displayName": {"text": "Blue Bottle Roastery"},
+            "formattedAddress": "1 Chome-4-8 Hirano, Koto City, Tokyo 135-0023, Japan",
+            "location": {"latitude": 35.6812, "longitude": 139.8055},
+            "addressComponents": [
+                {"longText": "Koto City", "types": ["locality", "political"]},
+                {"longText": "Tokyo", "types": ["administrative_area_level_1"]},
+                {"longText": "Japan", "types": ["country"]}
+            ]
+        }
+        trans_tokyo = searcher.transform_google_place(raw_tokyo)
+        self.assertEqual(trans_tokyo["region"], "Koto City")
+
+        # 3. Fallback when addressComponents is omitted: parses from comma separated address
+        raw_london = {
+            "id": "places/london_001",
+            "displayName": {"text": "Monmouth Coffee Company"},
+            "formattedAddress": "27 Monmouth St, Covent Garden, London, WC2H 9EU, UK",
+            "location": {"latitude": 51.5134, "longitude": -0.1265}
+        }
+        trans_london = searcher.transform_google_place(raw_london)
+        self.assertIn(trans_london["region"], ["Covent Garden", "London"])
+
+    def test_route_generator_international_address_no_forced_canada(self):
+        from route_generator import RouteGenerator, format_location_target
+
+        # 1. US Stop
+        us_stop = {
+            "name": "Empire State Building",
+            "address": "350 5th Ave, New York, NY 10118, USA",
+            "latitude": 40.7484,
+            "longitude": -73.9857
+        }
+        us_target = format_location_target(us_stop)
+        self.assertNotIn("Canada", us_target)
+        self.assertIn("New York", us_target)
+
+        # 2. UK Stop
+        uk_stop = {
+            "name": "British Museum",
+            "address": "Great Russell St, London WC1B 3DG, UK",
+            "latitude": 51.5194,
+            "longitude": -0.1270
+        }
+        uk_target = format_location_target(uk_stop)
+        self.assertNotIn("Canada", uk_target)
+
+        # 3. Canadian Stop with postal code should still include Canada
+        ca_stop = {
+            "name": "Toronto Public Library",
+            "address": "789 Yonge St, Toronto, ON M4W 2G8",
+            "latitude": 43.6718,
+            "longitude": -79.3867
+        }
+        ca_target = format_location_target(ca_stop)
+        self.assertIn("Canada", ca_target)
+
+        # 4. RouteGenerator process_route with US origin
+        rg_us = RouteGenerator(
+            origin_name="Manhattan Base",
+            origin_address="Times Square, New York, NY",
+            origin_lat=40.7580,
+            origin_lng=-73.9855
+        )
+        _, master_url, _ = rg_us.process_route([us_stop], visit_date_str="2026-09-22")
+        self.assertNotIn("Canada", master_url)
+        self.assertIn("New%20York", master_url)
+
+    def test_sheet_exporter_universal_headers(self):
+        from sheet_exporter import SheetExporter, EXPORT_HEADERS, UNIVERSAL_HEADERS
+
+        # Default fried_food template retains EXPORT_HEADERS for backward compatibility
+        exporter_fried = SheetExporter()
+        self.assertEqual(exporter_fried.headers, EXPORT_HEADERS)
+        self.assertEqual(exporter_fried.headers[1], "Restaurant Name")
+        self.assertEqual(exporter_fried.headers[6], "Fried Food Evidence")
+
+        # Non-fried template uses UNIVERSAL_HEADERS
+        exporter_coffee = SheetExporter(template="coffee")
+        self.assertEqual(exporter_coffee.headers, UNIVERSAL_HEADERS)
+        self.assertEqual(exporter_coffee.headers[1], "Place Name")
+        self.assertEqual(exporter_coffee.headers[6], "Match Evidence")
+
+        exporter_custom = SheetExporter(headers=["ID", "Name", "Location"])
+        self.assertEqual(exporter_custom.headers, ["ID", "Name", "Location"])
+
+    def test_heuristic_audit_generic_place(self):
+        from fried_model_auditor import AgentAuditManager
+
+        # Test coffee template auditor
+        coffee_mgr = AgentAuditManager(template="coffee", keywords=["espresso", "latte", "pour-over", "coffee"])
+        cafe_place = {
+            "id": "p_coffee",
+            "name": "Stumptown Coffee Roasters",
+            "primaryType": "cafe",
+            "editorialSummary": "Known for specialty espresso, single origin pour-overs and fresh cold brew."
+        }
+        is_m, conf, feats, rat = coffee_mgr.audit_place(cafe_place)
+        self.assertTrue(is_m)
+        self.assertGreaterEqual(conf, 0.8)
+        self.assertIn("espresso", feats)
+
+        # Test non-match
+        hardware_store = {
+            "id": "p_tools",
+            "name": "Home Hardware",
+            "primaryType": "hardware_store",
+            "editorialSummary": "Lumber, tools, building materials and paint supplies."
+        }
+        is_m_neg, conf_neg, feats_neg, _ = coffee_mgr.audit_place(hardware_store)
+        self.assertFalse(is_m_neg)
+
+    def test_filter_places_alias(self):
+        from filters import PlaceFilter, RestaurantFilter
+
+        self.assertIs(PlaceFilter, RestaurantFilter)
+        pf = PlaceFilter(exclude_places=["Shell", "Esso"])
+        self.assertEqual(pf.exclude_restaurants, ["shell", "esso"])
+
+        candidates = [
+            {"id": "p1", "name": "Shell Gas Station", "address": "123 Main St"},
+            {"id": "p2", "name": "Tesla Supercharger", "address": "456 Main St"}
+        ]
+        accepted, stats = pf.filter_places(candidates)
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["name"], "Tesla Supercharger")
+        self.assertEqual(stats["excluded_manual"], 1)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,8 @@
-# Daily Restaurant Lead Scout & Route Planner
+# Universal Public Place Scout & Route Planner
 
-面向 AI 智能体的每日餐馆拓客与路线导航规划技能（专为餐饮供应链、商用设备巡检、地推开拓及商务拜访等场景设计）。
+面向 AI 智能体的全球公开场所与商户拓客、路线导航规划技能（支持餐饮供应链、商用设备巡检、精品咖啡、汽车后市场、健身俱乐部、齿科诊所、零售地推及商务拜访等多行业场景）。
 
-自动化执行全流程：沿指定地理推进方向检索英文 Google Maps 油炸餐饮商家，通过多模态视觉与语义能力审核菜单及菜品照片，排除系统已签约与历史已拜访商家，锁定次日拜访的餐馆（默认 30 家，可自由配置），规划无折返跑的高效单向推进路线，生成 30 站连贯 Google Maps 导航链接，并落盘至 Google Sheet 与 5 列规范表格。
+自动化执行全流程：在全球任意地区或指定走廊/商圈检索英文 Google Maps 公开场所（餐厅、咖啡馆、汽修洗车、健身房、诊所、零售店等），通过多模态视觉与 Jev 语义决策模型对商户设施与服务进行自定义研判，排除已签约与历史已拜访地点，锁定目标拜访场所（默认 30 家，可自由配置），规划无折返跑的高效推进路线，生成无缝衔接的 Google Maps 导航链接，并落盘至 Google Sheet 与 7 列纯英文规范表格。
 
 ---
 
@@ -17,24 +17,30 @@
 3. **双层模型驱动实体对齐过滤（Tiered Entity Resolution）**：
    - **Tier 1 (硬匹配快速通道)**：基于 Google Place ID 和规范化纯数字电话精确排重（0 Token、毫秒级）；
    - **Tier 2 (TypeSafe Jev 决策模型通道)**：接入 TypeSafe AI 官方 `jev-latest` 类型化决策模型（`noul`/`choice`，`POST https://api.typesafe.ai/v1/systemone`），针对同店不同名、品牌别名、中英文混杂与商圈地址重叠，进行精准语义实体对齐，智能区分同一连锁不同分店（不误杀）与同一实体（彻底排除），未配置 Key 时优雅降级为本地启发式规则。
-4. **中间过程文件与系统临时目录隔离（Temp Directory Isolation）**：
-   - 待审核商家菜品图片引用与菜单数据保存至系统临时目录 `/tmp/restaurant_lead_scout/audit/`。
+4. **全球多领域泛化与动态区域提取（Universal Global Discovery）**：
+   - 全球任意经纬度或地址起步，动态从 Google Places `addressComponents` 提取行政区划与城市（摒弃固定区域锁与强制国别后缀）；
+   - 支持 `--place-types` 自由传入 Google Places API (New) 支持的任意类型（如 `cafe`, `gym`, `car_repair`, `car_wash`, `dentist`, `hotel`, `store` 等）。
+5. **动态判定标准与 Jev 模板（Dynamic Criteria & Jev Templates）**：
+   - 支持通过 `--template` 选用开箱即用的预设模板（`fried_food` 油炸餐饮、`coffee` 精品咖啡、`auto` 汽车后市场、`fitness` 健身房、`general` 通用标准）；
+   - 支持通过 `--criteria` 注入任意自定义自然语言研判标准（如 `"has commercial espresso machine"`, `"offers ceramic coating or PPF"`, `"provides pediatric dentistry"`）。
+6. **中间过程文件与系统临时目录隔离（Temp Directory Isolation）**：
+   - 待审核场所图片引用与数据保存至系统临时目录 `/tmp/restaurant_lead_scout/audit/`。
    - 无论用户在何处执行脚本，绝不污染用户当前工作目录与代码仓库。
-5. **Google Sheet 极简 Apps Script Webhook 云端落盘**：
+7. **Google Sheet 极简 Apps Script Webhook 云端落盘**：
    - 专为个人与非技术用户打造，无需创建 Google Cloud 开发者账号，无需复杂的服务账号或 OAuth 认证。
    - 仅需在目标 Google Sheet 中粘贴 10 行极简 Apps 脚本并部署为 Web 应用，即可实现零凭据、免密、永不失效的在线表格全自动双向同步与异常看板。
-6. **Jev 决策模型与智能体多模态菜品审核（Jev Decision Model & Multimodal Vision）**：
-   - 采用 TypeSafe AI `jev-latest` 决策模型对商户分类、描述摘要与用户评价进行炸炉使用概率（`has_commercial_fryer`）与用油量等级（`oil_consumption_level`）智能研判，结合智能体原生多模态视觉查验菜品图片。
-7. **防折返跑走廊切片推进算法（Anti-Shuttle Corridor Slice Sweep）**：
+8. **Jev 决策模型与智能体多模态视觉审核（Jev Decision Model & Multimodal Vision）**：
+   - 采用 TypeSafe AI `jev-latest` 决策模型对商户分类、描述摘要与用户评价进行特征研判，结合智能体原生多模态视觉查验实拍图片。
+9. **防折返跑走廊切片推进算法（Anti-Shuttle Corridor Slice Sweep）**：
    - 将前进走廊按纵向深度切分为局部切片（默认 2.0 km）。在微商圈内就近聚类清扫，片间严格单向向前推进。
-8. **分段无缝导航与斜杠总览链接（适配 Google Maps 10 站限制）**：
-   - 鉴于 Google Maps 原生移动端及网页端单次导航路线严格限制 **最多 10 个停靠点**（1 个起点 + 9 个途径站），为防止停靠点溢出导致“地图无法找到”或截断，系统自动将 30 站路线生成为 **4 段无缝衔接的行驶导航链接**（Leg 1 ~ Leg 4，每段 ≤ 9 站），移动端或车载 CarPlay / Android Auto 点击即开导航；同时提供 30 站桌面端全量总览链接。
-9. **规范 7 列纯英文数据报表导出 (7-Column Pure English Spreadsheet Export)**：
-   - 包含：`No.`、`Restaurant Name`、`Address`（商家详细地址含 Unit/门牌）、`Navigation Address`（规范主导航地址，多商户同商圈/商场自动垂直合并单元格去重）、`Opening Hours`、`Phone`、`Fried Food Evidence`（商用炸炉配置、Jev 决策模型分析或油炸菜品依据，全表格内容严格使用纯英文）。
-10. **智能开业状态与公休日过滤（Operational Status & Day-of-Week Gatekeeper）**：
+10. **分段无缝导航与斜杠总览链接（适配 Google Maps 10 站限制）**：
+   - 鉴于 Google Maps 原生移动端及网页端单次导航路线严格限制 **最多 10 个停靠点**（1 个起点 + 9 个途径站），系统自动将路线生成为 **4 段无缝衔接的行驶导航链接**（Leg 1 ~ Leg 4，每段 ≤ 9 站），移动端或车载 CarPlay / Android Auto 点击即开导航；同时提供桌面端全量总览链接。
+11. **规范 7 列纯英文数据报表导出 (7-Column Pure English Spreadsheet Export)**：
+   - 包含：`No.`、`Place Name`（或 `Restaurant Name`）、`Address`（详细地址含 Unit/门牌）、`Navigation Address`（规范主导航地址，多商户同商圈/商场自动垂直合并单元格去重）、`Opening Hours`、`Phone`、`Match Evidence`（全表格内容严格使用纯英文）。
+12. **智能开业状态与公休日过滤（Operational Status & Day-of-Week Gatekeeper）**：
    - **停业剔除**：强制过滤 Google Places `CLOSED_PERMANENTLY`（已倒闭）与 `CLOSED_TEMPORARILY`（已歇业）；
    - **公休过滤**：根据计划拜访日期自动计算星期几（如周一/周二），若当天为该店公休日（`Closed`），直接剔除；
-   - **时段对齐**：白天扫街拜访时，自动排除 17:00 以后才开门的纯夜宵/酒吧（可通过 `--allow-dinner-only` 开启夜间巡检）。
+   - **时段对齐**：白天拜访时，自动排除 17:00 以后才开门的纯夜宵/酒吧（可通过 `--allow-dinner-only` 开启夜间巡检）。
 
 ---
 
@@ -131,10 +137,10 @@ sequenceDiagram
 
 ```bash
 # 方式 A：安装到当前项目工作区（推荐：自动识别当前 Agent 并放入 .agents/skills/）
-npx skills add hellomrleeus/daily_restaurant_lead_scout
+npx skills add hellomrleeus/google-maps-place-scout
 
 # 方式 B：全局安装（对本机所有工作区及各类智能体生效，免项目目录占用）
-npx skills add hellomrleeus/daily_restaurant_lead_scout -g
+npx skills add hellomrleeus/google-maps-place-scout -g
 ```
 
 > **工作机制与依赖提示**：
@@ -154,51 +160,51 @@ npx skills add hellomrleeus/daily_restaurant_lead_scout -g
 #### 方案 A：Google Antigravity / Gemini CLI（官方标准规范）
 * **项目内工作区纯净免 Git 挂载（秒级解压，绝不污染代码库，严禁单数 `.agent`）**：
   ```bash
-  mkdir -p .agents/skills/daily-restaurant-lead-scout && \
-  curl -sL https://github.com/hellomrleeus/daily_restaurant_lead_scout/archive/refs/heads/main.tar.gz | \
-    tar -xz -C .agents/skills/daily-restaurant-lead-scout --strip-components=1
+  mkdir -p .agents/skills/google-maps-place-scout && \
+  curl -sL https://github.com/hellomrleeus/google-maps-place-scout/archive/refs/heads/main.tar.gz | \
+    tar -xz -C .agents/skills/google-maps-place-scout --strip-components=1
   ```
   *(注：仅下载 80KB 纯净资源包，全程无 `.git` 文件夹，彻底避免触发任何版本控制冲突与子模块问题)*
 
 * **全局免污染挂载（推荐）：跨所有工程通用，完全不占用项目目录**：
   ```bash
-  mkdir -p ~/.gemini/config/skills/daily-restaurant-lead-scout && \
-  curl -sL https://github.com/hellomrleeus/daily_restaurant_lead_scout/archive/refs/heads/main.tar.gz | \
-    tar -xz -C ~/.gemini/config/skills/daily-restaurant-lead-scout --strip-components=1
+  mkdir -p ~/.gemini/config/skills/google-maps-place-scout && \
+  curl -sL https://github.com/hellomrleeus/google-maps-place-scout/archive/refs/heads/main.tar.gz | \
+    tar -xz -C ~/.gemini/config/skills/google-maps-place-scout --strip-components=1
   ```
 
 * **或使用一键纯净安装脚本（自动处理环境适配）**：
   ```bash
   # 项目内安装 (自动清理历史遗留 .agent，自动添加 .gitignore)
-  curl -fsSL https://raw.githubusercontent.com/hellomrleeus/daily_restaurant_lead_scout/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/hellomrleeus/google-maps-place-scout/main/install.sh | bash
 
   # 全局安装 (免项目污染)
-  curl -fsSL https://raw.githubusercontent.com/hellomrleeus/daily_restaurant_lead_scout/main/install.sh | bash -s -- --global
+  curl -fsSL https://raw.githubusercontent.com/hellomrleeus/google-maps-place-scout/main/install.sh | bash -s -- --global
   ```
 
 #### 方案 B：Anthropic Claude Code
 * **全局用户级技能挂载（免 Git 纯净包）**：
   ```bash
-  mkdir -p ~/.claude/skills/daily-restaurant-lead-scout && \
-  curl -sL https://github.com/hellomrleeus/daily_restaurant_lead_scout/archive/refs/heads/main.tar.gz | \
-    tar -xz -C ~/.claude/skills/daily-restaurant-lead-scout --strip-components=1
+  mkdir -p ~/.claude/skills/google-maps-place-scout && \
+  curl -sL https://github.com/hellomrleeus/google-maps-place-scout/archive/refs/heads/main.tar.gz | \
+    tar -xz -C ~/.claude/skills/google-maps-place-scout --strip-components=1
   ```
 * **在项目 `CLAUDE.md` 中声明**：可在工程根目录的 `CLAUDE.md` 中添加命令指引：
   ```markdown
-  - 餐厅拓客路由规划: `python3 ~/.claude/skills/daily-restaurant-lead-scout/scripts/main.py [ARGS]`
+  - 场所拓客与路由规划: `python3 ~/.claude/skills/google-maps-place-scout/scripts/main.py [ARGS]`
   ```
 
 #### 方案 C：Cursor / Windsurf (IDE 智能体)
 * **工程工作区纯净挂载（免 Git 纯净包）**：
   ```bash
-  mkdir -p skills/daily-restaurant-lead-scout && \
-  curl -sL https://github.com/hellomrleeus/daily_restaurant_lead_scout/archive/refs/heads/main.tar.gz | \
-    tar -xz -C skills/daily-restaurant-lead-scout --strip-components=1
+  mkdir -p skills/google-maps-place-scout && \
+  curl -sL https://github.com/hellomrleeus/google-maps-place-scout/archive/refs/heads/main.tar.gz | \
+    tar -xz -C skills/google-maps-place-scout --strip-components=1
   ```
-* **IDE Rules 声明**（在 `.cursor/rules/restaurant-scout.mdc` 或 `.cursorrules` / `.windsurfrules`）：
+* **IDE Rules 声明**（在 `.cursor/rules/place-scout.mdc` 或 `.cursorrules` / `.windsurfrules`）：
   ```markdown
-  当用户提出探店拓客、规划拜访路线或查找特定方向油炸餐厅时，请调用本项目下的技能脚本：
-  `python3 skills/daily-restaurant-lead-scout/scripts/main.py [ARGS]`
+  当用户提出探店拓客、规划拜访路线或查找公开场所时，请调用本项目下的技能脚本：
+  `python3 skills/google-maps-place-scout/scripts/main.py [ARGS]`
   ```
 
 #### 方案 D：通用独立 CLI 方案（彻底消除路径依赖，推荐所有 Agent）
@@ -206,11 +212,11 @@ npx skills add hellomrleeus/daily_restaurant_lead_scout -g
 ```bash
 python3 -m pip install -e .
 ```
-安装后，系统将注册全局 `restaurant-scout` 命令，任何智能体在任何工作目录下均可直接执行：
+安装后，系统将注册全局 `place-scout` 命令，任何智能体在任何工作目录下均可直接执行：
 ```bash
-restaurant-scout --direction EAST
+place-scout --direction EAST
 ```
-*(同时项目内置了免 pip 安装的通用包装脚本 `bin/restaurant-scout`，会自动智能探测与适配 macOS Apple Silicon / x86 Python 运行环境)*
+*(同时项目内置了免 pip 安装的通用包装脚本 `bin/place-scout` 与兼容别名 `bin/restaurant-scout`，会自动智能探测与适配 macOS Apple Silicon / x86 Python 运行环境)*
 
 
 ### 3. 环境依赖安装
@@ -247,7 +253,7 @@ pip install -r requirements.txt
 ## 目录结构
 
 ```
-daily_restaurant_lead_scout/
+google-maps-place-scout/
 ├── SKILL.md                          # 智能体技能标准定义 (Skill Specification)
 ├── README.md                         # 技能说明文档
 ├── requirements.txt                  # Python 依赖声明 (openpyxl)

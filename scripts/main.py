@@ -95,6 +95,9 @@ def main():
     parser.add_argument("--search-radius", type=float, default=None, help="目标搜索中心探测半径 (km，默认读取配置或 2.0 km)")
     parser.add_argument("--bounds", type=str, default=None, help="严格矩形边框过滤 'min_lat,min_lng,max_lat,max_lng'")
     parser.add_argument("--keywords", type=str, default=None, help="逗号分隔的自定义探测关键词列表 (覆盖或追加)")
+    parser.add_argument("--place-types", "--types", type=str, default=None, help="逗号分隔的目标地点类型 (如 'restaurant', 'cafe', 'gym', 'car_wash', 'dentist')")
+    parser.add_argument("--criteria", type=str, default=None, help="自定义研判判定标准 (如 'has commercial espresso machine', 'offers oil change')")
+    parser.add_argument("--template", type=str, default=None, help="判定标准预设模板 (fried_food, coffee, auto, fitness, general)")
     parser.add_argument("--config", type=str, default=None, help="Path to custom config.json")
     args = parser.parse_args()
 
@@ -226,14 +229,25 @@ def main():
     max_depth_km = args.radius or args.max_depth or corridor_cfg.get("max_search_depth_km", 28.0)
     step_km = corridor_cfg.get("step_distance_km", 3.0)
 
+    # Place types, template, and criteria resolution
+    place_types_arg = args.place_types
+    if place_types_arg:
+        place_types = [t.strip() for t in place_types_arg.split(",") if t.strip()]
+    else:
+        place_types = cfg.get("place_types", ["restaurant"])
+
+    template = (args.template or cfg.get("template", "fried_food")).strip().lower()
+    criteria = (args.criteria or cfg.get("criteria", "")).strip()
+
     print("\n" + "=" * 70)
-    print("Restaurant Lead Scout & Route Planner")
+    print("Universal Public Place Scout & Corridor Planner")
     print("=" * 70)
     print(f"规划拜访日期: {visit_date} ({date_label}) | 预定出发: {dep_time}")
     print(f"出发起点: {origin_name} ({origin_address})")
     print(f"扫街推进方向: {direction_str.upper()} (航向角 {bearing}°)")
     print(f"走廊覆盖参数: 宽度 ±{corridor_width_km} km | 纵深 {max_depth_km} km")
-    print(f"目标锁定数量: {target_count} 家英文 Google Maps 油炸餐饮商家\n")
+    print(f"目标类型与标准: 类型 [{', '.join(place_types)}] | 模板 [{template}]" + (f" | 判定标准: {criteria}" if criteria else ""))
+    print(f"目标锁定数量: {target_count} 家英文 Google Maps 场所\n")
 
     # Paths resolution
     paths_cfg = cfg.get("paths", {})
@@ -265,7 +279,7 @@ def main():
     temp_audit_dir = get_temp_dir("audit")
 
     # Initialize SheetExporter
-    exporter = SheetExporter(output_dir=output_dir)
+    exporter = SheetExporter(output_dir=output_dir, template=template)
     gs_cfg = cfg.get("google_sheets", {})
     webhook_url = gs_cfg.get("webhook_url") or gs_cfg.get("spreadsheet_url") or gs_cfg.get("spreadsheet_id", "")
 
@@ -297,17 +311,23 @@ def main():
         # Step 1: Generate corridor or radial probes and search Google Places in English
         if args.search_center or is_radial:
             radius_to_probe = search_radius_km if args.search_center else max_depth_km
-            print(f"【步骤 1/5】以目标商圈 [{search_name}] 为核心探测并检索周边 {radius_to_probe} km 英文 Google Maps 商家...")
+            print(f"【步骤 1/5】以目标商圈 [{search_name}] 为核心探测并检索周边 {radius_to_probe} km 英文 Google Maps 场所...")
             probes = generate_radial_probe_points(search_lat, search_lng, radius_km=radius_to_probe)
             print(f"  以目标商圈为中心部署了 {len(probes)} 个径向探测点 (半径 {radius_to_probe} km)")
         else:
-            print("【步骤 1/5】沿推进方向探测并检索英文 Google Maps 商家...")
+            print("【步骤 1/5】沿推进方向探测并检索英文 Google Maps 场所...")
             probes = generate_corridor_probe_points(origin_lat, origin_lng, bearing, step_km=step_km, max_depth_km=max_depth_km)
             print(f"  沿航向角 {bearing}° 部署了 {len(probes)} 个探测中心点 (间距 {step_km} km)")
 
         searcher = PlacesSearcher(api_key=api_key, referer=referer)
         if args.keywords:
             keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
+        elif template != "fried_food" or any(t != "restaurant" for t in place_types):
+            configured_kws = cfg.get("keywords")
+            if configured_kws:
+                keywords = configured_kws
+            else:
+                keywords = [t.replace("_", " ") for t in place_types]
         else:
             keywords = cfg.get("fried_keywords", ["fried chicken", "wings", "fish and chips", "katsu", "tempura"])
 
@@ -316,7 +336,8 @@ def main():
             probes,
             keywords=keywords,
             radius_meters=probe_radius_m,
-            target_count=target_count
+            target_count=target_count,
+            place_types=place_types
         )
 
         # Apply bounding box hard filter if requested
@@ -354,10 +375,10 @@ def main():
                         }
                         raw_candidates.insert(0, injected)
 
-        print(f"  初始检索到 {len(raw_candidates)} 家潜在油炸餐饮商家。\n")
+        print(f"  初始检索到 {len(raw_candidates)} 家潜在目标场所。\n")
 
         # Step 2: Apply Filters (Contracted CRM & Visited Sheets + Spatial Geofencing + Manual Overrides)
-        print("【步骤 2/5】执行商家过滤规则 (多源自适应摄取 + 模型语义实体对齐 + 地理空间与餐馆自定义约束)...")
+        print("【步骤 2/5】执行商家过滤规则 (多源自适应摄取 + 模型语义实体对齐 + 地理空间与场所自定义约束)...")
         exclude_regions = [r.strip() for r in args.exclude_regions.split(",")] if args.exclude_regions else []
         include_regions = [r.strip() for r in args.include_regions.split(",")] if args.include_regions else []
         exclude_restaurants = [r.strip() for r in args.exclude_restaurants.split(",")] if args.exclude_restaurants else []
@@ -370,6 +391,8 @@ def main():
             include_regions=include_regions,
             exclude_restaurants=exclude_restaurants,
             mandatory_restaurants=mandatory_restaurants,
+            exclude_places=exclude_restaurants,
+            mandatory_places=mandatory_restaurants,
             visit_date=visit_date,
             departure_time=dep_time,
             filter_closed=not args.keep_closed,
@@ -408,13 +431,16 @@ def main():
         print("【步骤 3/5】执行基于置信度的级联主动研判 (Jev 文本快筛 + 智能体原生多模态视觉精审)...")
         audit_mgr = AgentAuditManager(
             audit_dir=temp_audit_dir,
-            openrouter_api_key=openrouter_api_key
+            openrouter_api_key=openrouter_api_key,
+            criteria=criteria,
+            template=template,
+            keywords=keywords
         )
         pending_audit_file = audit_mgr.export_pending_audit(filtered_candidates)
         ambiguous_items = audit_mgr.ambiguous_candidates
 
         if ambiguous_items:
-            print(f"  [智能体多模态提示] 发现 {len(ambiguous_items)} 家存疑商家 (Jev 判定模糊)，已下载菜品照片至系统临时目录:")
+            print(f"  [智能体多模态提示] 发现 {len(ambiguous_items)} 家存疑场所 (Jev 判定模糊)，已下载照片至系统临时目录:")
             for amb in ambiguous_items:
                 photos_str = ", ".join([os.path.basename(p) for p in amb.get("local_photo_paths", [])]) or "无可用照片"
                 print(f"     ↳ {amb.get('name')} ({amb.get('primaryType')}): Jev 概率 {int(amb.get('jev_confidence', 0.5)*100)}% | 本地照片: {photos_str}")
@@ -431,14 +457,17 @@ def main():
             if c.get("_is_pinned"):
                 # Pinned by user: bypasses category audit
                 c_copy = dict(c)
-                c_copy["_fried_dishes"] = c.get("_fried_dishes", ["Special request (User Pinned)"])
+                pinned_feat = c.get("_matched_features") or c.get("_fried_dishes") or ["Special request (User Pinned)"]
+                c_copy["_matched_features"] = pinned_feat
+                c_copy["_fried_dishes"] = pinned_feat
                 c_copy["_audit_rationale"] = "Priority visit (User pinned merchant)"
                 verified_candidates.append(c_copy)
                 continue
-            is_fried, confidence, dishes, rationale = audit_mgr.audit_restaurant(c)
-            if is_fried:
+            is_match, confidence, features, rationale = audit_mgr.audit_place(c)
+            if is_match:
                 c_copy = dict(c)
-                c_copy["_fried_dishes"] = dishes
+                c_copy["_matched_features"] = features
+                c_copy["_fried_dishes"] = features
                 c_copy["_audit_rationale"] = rationale
                 verified_candidates.append(c_copy)
 
@@ -449,10 +478,10 @@ def main():
         if st.get("agent_cached", 0) > 0:
             print(f"     - 智能体多模态视觉审核确认 (Agent Verified): {st.get('agent_cached', 0)} 家")
         if st.get("ambiguous_need_agent", 0) > 0:
-            print(f"     - 存疑商家 (待智能体多模态精审): {st.get('ambiguous_need_agent', 0)} 家")
+            print(f"     - 存疑场所 (待智能体多模态精审): {st.get('ambiguous_need_agent', 0)} 家")
         if st.get("heuristic", 0) > 0:
             print(f"     - 本地规则后备兜底 (Heuristic): {st.get('heuristic', 0)} 家")
-        print(f"  最终确认提供油炸食品的有效商家: {len(verified_candidates)} 家\n")
+        print(f"  最终确认符合研判标准的有效场所: {len(verified_candidates)} 家\n")
 
         # Step 4: Directional Corridor Slice or Proximity Radial Route Planning
         router_bearing = bearing

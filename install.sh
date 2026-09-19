@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Daily Restaurant Lead Scout - Clean Installation Script
+# Universal Google Maps Place Scout - Clean Installation Script
 # Standardizes installation path to .agents/skills/ and strips Git metadata.
 # ==============================================================================
 
 set -e
 
-REPO_URL="https://github.com/hellomrleeus/daily_restaurant_lead_scout.git"
-SKILL_NAME="daily-restaurant-lead-scout"
+REPO_URL="https://github.com/hellomrleeus/google-maps-place-scout.git"
+SKILL_NAME="google-maps-place-scout"
 
 TARGET_MODE="project"
 TARGET_DIR=""
@@ -67,7 +67,7 @@ else
   echo "[Install] Downloading clean release archive from GitHub (Zero Git footprints)..."
   rm -rf "$DEST_DIR"
   mkdir -p "$DEST_DIR"
-  curl -sL "https://github.com/hellomrleeus/daily_restaurant_lead_scout/archive/refs/heads/main.tar.gz" | \
+  curl -sL "https://github.com/hellomrleeus/google-maps-place-scout/archive/refs/heads/main.tar.gz" | \
     tar -xz -C "$DEST_DIR" --strip-components=1
 fi
 
@@ -78,6 +78,9 @@ fi
 
 # Ensure executable permissions
 chmod +x "$DEST_DIR/scripts/main.py" 2>/dev/null || true
+if [ -f "$DEST_DIR/bin/place-scout" ]; then
+  chmod +x "$DEST_DIR/bin/place-scout" 2>/dev/null || true
+fi
 if [ -f "$DEST_DIR/bin/restaurant-scout" ]; then
   chmod +x "$DEST_DIR/bin/restaurant-scout" 2>/dev/null || true
 fi
@@ -92,7 +95,7 @@ if [ "$TARGET_MODE" = "project" ] && [ -f ".gitignore" ]; then
   fi
 fi
 
-echo "[Success] Daily Restaurant Lead Scout installed cleanly into:"
+echo "[Success] Google Maps Place Scout installed cleanly into:"
 echo "          $DEST_DIR"
 echo ""
 echo "[Verification] Running configuration check..."

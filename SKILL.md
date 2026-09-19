@@ -1,34 +1,34 @@
 ---
-name: daily-restaurant-lead-scout
-description: Automatically discover candidate fried-food restaurants along a unidirectional corridor without back-and-forth shuttling, audit menus and photos with AI models, filter out contracted/visited merchants, and generate Google Sheet + Google Maps navigation links on demand or on a user-defined schedule.
+name: google-maps-place-scout
+description: Automatically discover candidate public places (restaurants, cafes, gyms, auto shops, dental clinics, retail stores) along a unidirectional corridor or around an anchor without back-and-forth shuttling, audit features and photos with AI models, filter out contracted/visited locations, and generate Google Sheet + Google Maps navigation links on demand or on a user-defined schedule.
 ---
 
-# Daily Restaurant Lead Scout & Route Planner
+# Universal Public Place Scout & Corridor Planner
 
 ## 1. Skill Purpose & Workflow
 
-This skill executes an on-demand or scheduled lead discovery and navigation planning workflow:
-1. **English Google Maps Places Search**: Queries target regions for fried-food restaurants using Google Maps Places API (New) with `languageCode: "en"`.
-2. **Contracted & Visited Merchant Filtering (Multi-Source & Jev Decision Model)**: Ingests exclusion lists from Excel (.xlsx), CSV, JSON, or REST APIs. Employs tiered matching: Tier 1 Hard Match on Place ID / Phone + Tier 2 TypeSafe AI official `jev-latest` typed decision model (noul/choice via `POST https://api.typesafe.ai/v1/systemone`) on brand aliases and store addresses to eliminate contracted and previously visited merchants without false exclusions of distinct chain branches.
-3. **Agent Multimodal & Jev Menu Audit**: Leverages TypeSafe AI Jev typed decision model (`has_commercial_fryer`, `fried_category`, `oil_consumption_level`) to audit menu descriptions and reviews, combined with agent native multimodal vision inspection of food photos.
-4. **Anti-Shuttle Corridor Routing**: Slices the directional corridor into depth bins and sweeps local merchant clusters monotonically forward without back-and-forth oscillation or reversing along the travel axis.
-5. **Sequential 10-Stop Google Maps Navigation Legs & Overview URL**: Because Google Maps natively limits turn-by-turn driving routes to 10 stops (1 Origin + 9 Waypoints), formats the 30 stops into 4 sequential driving legs (Leg 1: 1–9, Leg 2: 9–18, Leg 3: 18–27, Leg 4: 27–30) for reliable 1-click mobile driving, plus a master overview URL for desktop review.
+This skill executes an on-demand or scheduled lead discovery and navigation planning workflow across **any public place types on Google Maps** (restaurants, cafes, auto detailing, fitness centers, dental clinics, retail stores, etc.):
+1. **Global Google Maps Places Search (English)**: Queries target regions globally using Google Maps Places API (New) with `languageCode: "en"` and dynamic `includedType` / keyword probe expansion.
+2. **Contracted & Visited Location Filtering (Multi-Source & Jev Decision Model)**: Ingests exclusion lists from Excel (.xlsx), CSV, JSON, or REST APIs. Employs tiered matching: Tier 1 Hard Match on Place ID / Phone + Tier 2 TypeSafe AI official `jev-latest` typed decision model (noul/choice via `POST https://api.typesafe.ai/v1/systemone`) on brand aliases and store addresses to eliminate contracted and previously visited locations without false exclusions of distinct chain branches.
+3. **Agent Multimodal & Jev Feature Audit**: Leverages TypeSafe AI Jev typed decision models with customizable criteria (`criteria`, `template`: `fried_food`, `coffee`, `auto`, `fitness`, `general`) to audit descriptions, services, and reviews, combined with agent native multimodal vision inspection of storefront and facility photos.
+4. **Anti-Shuttle Corridor Routing**: Slices the directional corridor into depth bins and sweeps local place clusters monotonically forward without back-and-forth oscillation or reversing along the travel axis.
+5. **Sequential 10-Stop Google Maps Navigation Legs & Overview URL**: Because Google Maps natively limits turn-by-turn driving routes to 10 stops (1 Origin + 9 Waypoints), formats the stops into sequential driving legs (Leg 1: 1–9, Leg 2: 9–18, Leg 3: 18–27, Leg 4: 27–30) for reliable 1-click mobile driving, plus a master overview URL for desktop review.
 6. **7-Column English Spreadsheet & Report Export**: Generates normalized, professionally styled Excel (.xlsx) workbook, CSV, and Markdown report with 7 columns (headers and content strictly in pure English):
    - `No.`
-   - `Restaurant Name`
-   - `Address` (Detailed merchant address including unit/suite)
+   - `Place Name` (or `Restaurant Name` for fried food)
+   - `Address` (Detailed location address including unit/suite)
    - `Navigation Address` (Deduplicated canonical driving address, vertically merged across multi-merchant complexes/malls)
    - `Opening Hours` (Condensed weekday schedule)
    - `Phone`
-   - `Fried Food Evidence` (Commercial fryer tier, Jev typed decision rationale, dish photos, or verified menu items)
+   - `Match Evidence` (or `Fried Food Evidence` for fried food)
 
 ```mermaid
 flowchart LR
-    A["Trigger (On-Demand / User Schedule)"] --> B["Google Places Search (EN)"]
+    A["Trigger (On-Demand / User Schedule)"] --> B["Google Places Search (Global EN)"]
     B --> C["Filter: Contracted & Visited (Tier 1 Hard + Tier 2 Jev Model)"]
     C --> D["Audit: Jev Decision Model & Multimodal Photos"]
     D --> E["Anti-Shuttle Corridor Slice Router"]
-    E --> F["Full 30-Stop Navigation URL"]
+    E --> F["Full Navigation Route URL"]
     E --> G["7-Column English Spreadsheet & Report"]
 ```
 
@@ -152,14 +152,14 @@ The system automatically senses whether it is running within a project workspace
 > **Resolve `<SKILL_DIR>` according to your agent environment**:
 > | Platform / Agent | Standard `<SKILL_DIR>` Mount Path | Direct Command |
 > | :--- | :--- | :--- |
-> | **Google Antigravity (Workspace Standard)** | `<workspace>/.agents/skills/daily-restaurant-lead-scout` | `python3 .agents/skills/daily-restaurant-lead-scout/scripts/main.py [ARGS]` |
-> | **Google Antigravity (Global)** | `~/.gemini/config/skills/daily-restaurant-lead-scout` | `python3 ~/.gemini/config/skills/daily-restaurant-lead-scout/scripts/main.py [ARGS]` |
-> | **Google Antigravity (Legacy Workspace)** | `<workspace>/.gemini/skills/daily-restaurant-lead-scout` | `python3 .gemini/skills/daily-restaurant-lead-scout/scripts/main.py [ARGS]` |
-> | **Anthropic Claude Code** | `~/.claude/skills/daily-restaurant-lead-scout` | `python3 ~/.claude/skills/daily-restaurant-lead-scout/scripts/main.py [ARGS]` |
-> | **Cursor / Windsurf** | `<workspace>/skills/daily-restaurant-lead-scout` | `python3 skills/daily-restaurant-lead-scout/scripts/main.py [ARGS]` |
-> | **Global CLI (`pip install -e .`)** | Registered on system `PATH` | `restaurant-scout [ARGS]` |
+> | **Google Antigravity (Workspace Standard)** | `<workspace>/.agents/skills/google-maps-place-scout` | `python3 .agents/skills/google-maps-place-scout/scripts/main.py [ARGS]` |
+> | **Google Antigravity (Global)** | `~/.gemini/config/skills/google-maps-place-scout` | `python3 ~/.gemini/config/skills/google-maps-place-scout/scripts/main.py [ARGS]` |
+> | **Google Antigravity (Legacy Workspace)** | `<workspace>/.gemini/skills/google-maps-place-scout` | `python3 .gemini/skills/google-maps-place-scout/scripts/main.py [ARGS]` |
+> | **Anthropic Claude Code** | `~/.claude/skills/google-maps-place-scout` | `python3 ~/.claude/skills/google-maps-place-scout/scripts/main.py [ARGS]` |
+> | **Cursor / Windsurf** | `<workspace>/skills/google-maps-place-scout` | `python3 skills/google-maps-place-scout/scripts/main.py [ARGS]` |
+> | **Global CLI (`pip install -e .`)** | Registered on system `PATH` | `place-scout [ARGS]` |
 >
-> **Agent Execution Rule**: In all commands below, `<SKILL_DIR>` denotes your resolved absolute skill path. If `restaurant-scout` is registered on the host system PATH, you can also execute `restaurant-scout [ARGS]` directly.
+> **Agent Execution Rule**: In all commands below, `<SKILL_DIR>` denotes your resolved absolute skill path. If `place-scout` is registered on the host system PATH, you can also execute `place-scout [ARGS]` directly.
 
 ### Standard Execution
 ```bash
@@ -368,6 +368,9 @@ When interacting with the user, the agent automatically maps natural language in
 | "规划明天去多伦多东边的路线" (未指明具体时间) | `--visit-date tomorrow --direction east` (默认 09:30) |
 | "下周一上午 10 点从大本营出发" | `--visit-date <YYYY-MM-DD> --departure-time 10:00` |
 | "在 Fairview Mall 附近找 30 家油炸店" | `--origin "Fairview Mall" --direction radial --radius 6.0` |
+| "在曼哈顿寻找 20 家精品独立手冲咖啡馆" | `--origin "Times Square, New York" --place-types cafe --template coffee --count 20 --direction radial --radius 5.0` |
+| "规划沿走廊拜访 15 家汽修与汽车贴膜店" | `--place-types car_repair,car_wash --template auto --criteria "auto detailing, PPF, ceramic coating" --count 15 --direction east` |
+| "在市中心附近搜集 25 家健身房与搏击馆" | `--place-types gym --template fitness --criteria "commercial gym, CrossFit, boxing studio" --count 25 --direction south` |
 | "以 A (如 Field Operations Base) 为出发地址，在截图范围内找 30 家店" | `--origin "A" --search-center "<lat>,<lng>" --search-radius <km> --bounds "<min_lat,min_lng,max_lat,max_lng>"` |
 | "提供地图截图 / 圈选范围 / 在图示范围找" | 提取中心与矩形边界，调用 `--search-center "<lat>,<lng>" --search-radius <km> --bounds "<min_lat,min_lng,max_lat,max_lng>"` |
 | "以 Markville Mall 为核心找周边 1.5 公里" | `--search-center "CF Markville, Markham" --search-radius 1.5` |
