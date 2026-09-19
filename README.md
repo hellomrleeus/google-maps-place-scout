@@ -69,13 +69,13 @@ sequenceDiagram
     Engine->>Maps: 并发探测走廊各中心点 (Language: EN, places.photos, reviews)
     Maps-->>Engine: 返回候选商户池 (名称、地址、电话、营业时间、照片 URL、评价)
 
-    %% 阶段 3: 已签约与已拜访排重 (双层消歧)
-    Note over Engine, Jev: 阶段 3: 已签约与已拜访排重 (双层消歧)
-    Engine->>CRM: 摄取已签约清单 (contracted_source) & 历史拜访库 (visited_source)
-    CRM-->>Engine: 返回异构表单数据 (Excel / CSV / REST API)
-    Engine->>Engine: Tier 1 硬匹配 (Place ID 与规范化电话精确排重)
+    %% 阶段 3: 黑名单与已有场所排重 (双层消歧)
+    Note over Engine, Jev: 阶段 3: 黑名单与已有场所排重 (双层消歧)
+    Engine->>Sources: 摄取黑名单与排除源 (exclusion_sources)
+    Sources-->>Engine: 返回异构表单数据 (Excel / CSV / JSON / REST API)
+    Engine->>Engine: Tier 1 硬匹配 (Place ID、规范化电话与名称精确排重)
     opt 存在别名 / 多店混淆
-        Engine->>Jev: Tier 2 语义消歧 (比较商户名、商圈与已有签约/拜访记录)
+        Engine->>Jev: Tier 2 语义消歧 (比较场所名、商圈与黑名单记录)
         Jev-->>Engine: 判定同店概率 (识别连锁新分店不误杀，真实同实体彻底排除)
     end
     Engine->>Engine: 营业状态守门 (排除永久停业与公休日场所)
@@ -117,8 +117,8 @@ sequenceDiagram
 
 1. **意图解析与调度 (Human <-> Agent)**：
    业务人员无需记忆或拼装复杂的命令行参数，使用自然语言即可提出拓客目标。智能体（Agent）理解人类意图后，在后台调度 Python 引擎进行精确计算。
-2. **多源异构数据消歧过滤 (Engine <-> CRM <-> Jev)**：
-   系统对接企业既有的已签约客户库（`contracted_source`）与历史拜访库（`visited_source`）。先走 Place ID/电话硬匹配；遇同品牌分店或别名时，自动调用 Jev 决策模型进行语义级同店识别，既不漏掉可拜访的新分店，又彻底杜绝重复跑腿。
+2. **多源异构数据消歧过滤 (Engine <-> Sources <-> Jev)**：
+   系统对接用户提供的黑名单与已有场所数据源（`exclusion_sources`，支持多文件与 API 聚合）。先走 Place ID/电话/名称硬匹配；遇同品牌分店或别名时，自动调用 Jev 决策模型进行语义级实体消歧，既不漏掉可拜访的新分店，又彻底杜绝重复跑腿。
 3. **基于置信度的级联主动研判 (Engine <-> Jev <-> Agent Multimodal)**：
    - 确定性高的商家（如完全吻合特征或纯无关业态）通过 Jev 文本分类在毫秒级快速决断；
    - 处于模糊区间的商家（如复合门店、新开跨界场所等），Python 引擎自动拉取实拍图并派发工单，由**拥有原生多模态视觉的智能体（Agent）调用 `view_file` 肉眼查验门面招牌与专业设施**，将研判结论回传闭环，无需引入任何第三方付费图像 API。
@@ -363,12 +363,11 @@ python3 scripts/main.py
 python3 scripts/main.py --sheet-url "https://script.google.com/macros/s/AKfycbz.../exec"
 ```
 
-### 8. 动态接入自定义排除数据源 (Excel / CSV / API)
+### 8. 动态接入自定义黑名单与排除数据源 (Excel / CSV / JSON / API)
 ```bash
-# 传入本地 CRM 导出的 Excel 与销售已拜访日志接口
+# 传入本地黑名单 Excel，以及逗号分隔的已有记录接口/文件
 python3 scripts/main.py \
-  --contracted-source ~/Desktop/crm_merchants.xlsx \
-  --visited-source https://crm.company.com/api/v1/visited-records
+  --exclusion-sources "~/Desktop/blacklist.xlsx, https://api.company.com/v1/visited-records"
 ```
 
 ### 运行单元测试

@@ -1,6 +1,6 @@
 ---
 name: google-maps-place-scout
-description: Automatically discover candidate public places (restaurants, cafes, gyms, auto shops, dental clinics, retail stores) along a unidirectional corridor or around an anchor without back-and-forth shuttling, audit features and photos with AI models, filter out contracted/visited locations, and generate Google Sheet + Google Maps navigation links on demand or on a user-defined schedule.
+description: Automatically discover candidate public places (restaurants, cafes, gyms, auto shops, dental clinics, retail stores) along a unidirectional corridor or around an anchor without back-and-forth shuttling, audit features and photos with AI models, filter out blacklisted/excluded locations, and generate Google Sheet + Google Maps navigation links on demand or on a user-defined schedule.
 ---
 
 # Universal Public Place Scout & Corridor Planner
@@ -9,7 +9,7 @@ description: Automatically discover candidate public places (restaurants, cafes,
 
 This skill executes an on-demand or scheduled lead discovery and navigation planning workflow across **any public place types on Google Maps** (restaurants, cafes, auto detailing, fitness centers, dental clinics, retail stores, etc.):
 1. **Global Google Maps Places Search (English)**: Queries target regions globally using Google Maps Places API (New) with `languageCode: "en"` and dynamic `includedType` / keyword probe expansion.
-2. **Contracted & Visited Location Filtering (Multi-Source & Jev Decision Model)**: Ingests exclusion lists from Excel (.xlsx), CSV, JSON, or REST APIs. Employs tiered matching: Tier 1 Hard Match on Place ID / Phone + Tier 2 TypeSafe AI official `jev-latest` typed decision model (noul/choice via `POST https://api.typesafe.ai/v1/systemone`) on brand aliases and store addresses to eliminate contracted and previously visited locations without false exclusions of distinct chain branches.
+2. **Exclusion & Blacklist Location Filtering (Multi-Source & Jev Decision Model)**: Ingests exclusion lists from Excel (.xlsx), CSV, JSON, or REST APIs. Employs tiered matching: Tier 1 Hard Match on Place ID / Phone / Name + Tier 2 TypeSafe AI official `jev-latest` typed decision model (noul/choice via `POST https://api.typesafe.ai/v1/systemone`) on brand aliases and store addresses to eliminate blacklisted and previously recorded locations without false exclusions of distinct chain branches.
 3. **Agent Multimodal & Jev Feature Audit**: Leverages TypeSafe AI Jev typed decision models with customizable criteria (`criteria`, `template`: `coffee`, `auto`, `fitness`, `dining`, `general`) to audit descriptions, services, and reviews, combined with agent native multimodal vision inspection of storefront and facility photos.
 4. **Anti-Shuttle Corridor Routing**: Slices the directional corridor into depth bins and sweeps local place clusters monotonically forward without back-and-forth oscillation or reversing along the travel axis.
 5. **Sequential 10-Stop Google Maps Navigation Legs & Overview URL**: Because Google Maps natively limits turn-by-turn driving routes to 10 stops (1 Origin + 9 Waypoints), formats the stops into sequential driving legs (Leg 1: 1–9, Leg 2: 9–18, Leg 3: 18–27, Leg 4: 27–30) for reliable 1-click mobile driving, plus a master overview URL for desktop review.
@@ -25,7 +25,7 @@ This skill executes an on-demand or scheduled lead discovery and navigation plan
 ```mermaid
 flowchart LR
     A["Trigger (On-Demand / User Schedule)"] --> B["Google Places Search (Global EN)"]
-    B --> C["Filter: Contracted & Visited (Tier 1 Hard + Tier 2 Jev Model)"]
+    B --> C["Filter: Exclusion Sources (Tier 1 Hard + Tier 2 Jev Model)"]
     C --> D["Audit: Jev Decision Model & Multimodal Photos"]
     D --> E["Anti-Shuttle Corridor Slice Router"]
     E --> F["Full Navigation Route URL"]
@@ -313,11 +313,10 @@ The skill exclusively synchronizes to Google Sheets via **Google Apps Script Web
 *(If no Webhook URL is configured, the skill automatically saves full 7-column reports to local Excel `.xlsx`, CSV, and Markdown files in `<project_root>/output/` with zero crashing.)*
 
 ### Custom Exclusion Data Sources (Excel, CSV, API, or JSON)
-Pass arbitrary custom exclusion sources dynamically:
+Pass single or multiple comma-separated custom exclusion sources dynamically:
 ```bash
 python3 <SKILL_DIR>/scripts/main.py \
-  --contracted-source ~/Desktop/crm_clients.xlsx \
-  --visited-source https://crm.company.com/api/v1/visited-logs
+  --exclusion-sources "~/Desktop/blacklist.xlsx, https://crm.company.com/api/v1/visited-logs"
 ```
 
 ### Custom Departure Origin & Multi-Format Parsing

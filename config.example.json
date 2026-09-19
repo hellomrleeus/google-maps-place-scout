@@ -46,8 +46,7 @@
   "default_visit_target": "auto",
   "default_departure_time": "09:30",
   "paths": {
-    "contracted_file": "",
-    "visited_file": "",
+    "exclusion_sources": [],
     "output_dir": "output"
   },
   "google_sheets": {

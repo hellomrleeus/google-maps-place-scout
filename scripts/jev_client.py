@@ -362,13 +362,13 @@ class JevDecisionClient:
 
         state = (
             f"Candidate Place: Name='{c_name}', Address='{c_addr}', Phone='{c_phone}', Type='{c_type}'.\n"
-            f"Reference Exclusion Merchant: Name='{r_name}', Address='{r_addr}', Phone='{r_phone}'."
+            f"Blacklist / Excluded Reference Entry: Name='{r_name}', Address='{r_addr}', Phone='{r_phone}'."
         )
 
         questions = {
             "is_same_entity": {
                 "type": "noul",
-                "instructions": "Is the candidate place the exact same physical store, branch, or business entity as the reference merchant?",
+                "instructions": "Is the candidate place the exact same physical store, branch, or entity as the blacklisted reference entry?",
                 "criteria": {
                     "true": "Exact same physical business and location, or same branch accounting for name variations / translations",
                     "false": "Different location, different branch of a chain, or unrelated business"
@@ -376,10 +376,10 @@ class JevDecisionClient:
             },
             "relationship": {
                 "type": "choice",
-                "instructions": "What is the structural relationship between candidate and reference?",
+                "instructions": "What is the structural relationship between candidate place and blacklisted reference?",
                 "criteria": {
-                    "same_store": "Exact same physical store/location",
-                    "chain_different_branch": "Same brand/franchise chain, but at a different address",
+                    "same_store": "Exact same physical store/location (must be excluded)",
+                    "chain_different_branch": "Same brand/franchise chain, but at a different address (eligible to visit/discover)",
                     "different_business": "Completely different businesses"
                 }
             }

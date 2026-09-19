@@ -3,7 +3,7 @@
 Main entrypoint for Google Maps Place Scout & Corridor Planner Skill.
 Orchestrates:
 1. Google Places search along a unidirectional travel corridor in English.
-2. Filtering out contracted and visited places (CRM & Google Sheet).
+2. Filtering out blacklisted and excluded places (Exclusion Sources & Jev Disambiguation).
 3. Agent-Native multimodal AI audit of places & storefront photos (Zero external API key).
 4. Directional slice & cluster sweep algorithm (Anti-Shuttle "不要折返跑").
 5. Full 30-stop slash-concatenated Google Maps URL (bypassing 10-stop limit).
@@ -70,8 +70,7 @@ def main():
     parser.add_argument("--set-origin", type=str, default=None, help="设置默认出发起点 (支持文本地址、Google 地图链接或经纬度坐标)")
     parser.add_argument("--check-config", action="store_true", help="查看当前持久化配置状态 (输出结构化 JSON 供智能体检查)")
     parser.add_argument("--sheet-url", type=str, default=None, help="Google Apps Script Webhook URL (例如: https://script.google.com/macros/s/.../exec)")
-    parser.add_argument("--contracted-source", type=str, default=None, help="已签约场所数据源 (本地 Excel/CSV/JSON 路径或 REST API URL)")
-    parser.add_argument("--visited-source", type=str, default=None, help="已拜访场所数据源 (本地 Excel/CSV/JSON 路径或 REST API URL)")
+    parser.add_argument("--exclusion-sources", type=str, default=None, help="黑名单与排除场所数据源 (本地 Excel/CSV/JSON 路径或 REST API URL，支持逗号分隔多源)")
     parser.add_argument("--origin", type=str, default=None, help="出发起点 (支持 Google 地图链接、文本地址/商圈地标或 '纬度,经度' 坐标)")
     parser.add_argument("--exclude-regions", type=str, default=None, help="逗号分隔的避开/禁行区域或地标关键词 (例如 'scarborough,downtown')")
     parser.add_argument("--include-regions", type=str, default=None, help="逗号分隔的限定区域关键词 (例如 'markham')")
@@ -221,18 +220,39 @@ def main():
 
     # Paths resolution
     paths_cfg = cfg.get("paths", {})
-    contracted_source = args.contracted_source or paths_cfg.get("contracted_file", "")
-    visited_source = args.visited_source or paths_cfg.get("visited_file", "")
+    exclusion_sources_input = (
+        args.exclusion_sources
+        or paths_cfg.get("exclusion_sources", "")
+        or paths_cfg.get("exclusion_files", "")
+    )
 
-    def resolve_source(s: str) -> str:
-        if not s:
+    def resolve_source_string(sources_val: Any) -> Any:
+        if not sources_val:
             return ""
-        if s.startswith("http://") or s.startswith("https://") or os.path.isabs(s):
-            return s
-        return os.path.join(SKILL_DIR, s)
+        if isinstance(sources_val, list):
+            res_list = []
+            for s in sources_val:
+                exp = os.path.expanduser(str(s).strip())
+                if exp.startswith("http://") or exp.startswith("https://") or os.path.isabs(exp):
+                    res_list.append(exp)
+                else:
+                    res_list.append(os.path.join(SKILL_DIR, str(s).strip()))
+            return res_list
+        if isinstance(sources_val, str):
+            resolved_parts = []
+            for part in sources_val.split(","):
+                p = part.strip()
+                if not p:
+                    continue
+                exp = os.path.expanduser(p)
+                if exp.startswith("http://") or exp.startswith("https://") or os.path.isabs(exp):
+                    resolved_parts.append(exp)
+                else:
+                    resolved_parts.append(os.path.join(SKILL_DIR, p))
+            return ", ".join(resolved_parts)
+        return sources_val
 
-    contracted_path = resolve_source(contracted_source)
-    visited_path = resolve_source(visited_source)
+    exclusion_sources = resolve_source_string(exclusion_sources_input)
 
     # Output directory: project output folder or user cache routes
     paths_env = get_effective_storage_paths()
@@ -345,7 +365,7 @@ def main():
 
         print(f"  初始检索到 {len(raw_candidates)} 家潜在目标场所。\n")
 
-        # Step 2: Apply Filters (Contracted CRM & Visited Sheets + Spatial Geofencing + Manual Overrides)
+        # Step 2: Apply Filters (Exclusion Sources & Blacklists + Spatial Geofencing + Manual Overrides)
         print("【步骤 2/5】执行场所过滤规则 (多源自适应摄取 + 模型语义实体对齐 + 地理空间与场所自定义约束)...")
         exclude_regions = [r.strip() for r in args.exclude_regions.split(",")] if args.exclude_regions else []
         include_regions = [r.strip() for r in args.include_regions.split(",")] if args.include_regions else []
@@ -353,8 +373,7 @@ def main():
         mandatory_places = [r.strip() for r in args.include_places.split(",")] if args.include_places else []
 
         r_filter = PlaceFilter(
-            contracted_path=contracted_path,
-            visited_path=visited_path,
+            exclusion_sources=exclusion_sources,
             exclude_regions=exclude_regions,
             include_regions=include_regions,
             exclude_places=exclude_places,
@@ -385,12 +404,11 @@ def main():
             print(f"  排除未开业/公休/纯夜间场所: {filter_stats['excluded_closed']} 家")
             for item in filter_stats.get("closed_details", [])[:3]:
                 print(f"     ↳ {item['name']}: {item['reason']}")
-        print(f"  排除已签约商家 (CRM): {filter_stats['excluded_contracted']} 家")
-        print(f"  排除已拜访商家 (Sheet/API): {filter_stats['excluded_visited']} 家")
-        print(f"     - 硬匹配精确命中: {filter_stats['hard_match_count']} 家 (ID / 规范电话)")
-        print(f"     - 模型语义对齐命中: {filter_stats['semantic_match_count']} 家 (品牌别名 / 商圈对齐)")
+        print(f"  排除黑名单与已有场所 (Exclusion Sources): {filter_stats.get('excluded_sources', 0)} 家")
+        print(f"     - 硬匹配精确命中: {filter_stats['hard_match_count']} 家 (ID / 规范电话 / 名称完全一致)")
+        print(f"     - 模型语义对齐命中: {filter_stats['semantic_match_count']} 家 (品牌别名 / 实体消歧)")
 
-        semantic_samples = [d for d in filter_stats.get("contracted_details", []) + filter_stats.get("visited_details", []) if d.get("tier") == "semantic_model"]
+        semantic_samples = [d for d in filter_stats.get("exclusion_details", []) if d.get("tier") == "semantic_model"]
         for s in semantic_samples[:3]:
             print(f"       ↳ {s['name']}: {s['reason']}")
 

@@ -17,7 +17,7 @@ import csv
 import json
 import urllib.request
 import urllib.error
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 # Fuzzy header mapping dictionaries
 FIELD_SYNONYMS = {
@@ -244,3 +244,61 @@ def load_exclusion_source(source: Optional[str]) -> List[Dict[str, Any]]:
         if not res:
             res = load_from_csv(expanded_path)
         return res
+
+def load_exclusion_sources(sources: Optional[Union[str, List[str]]]) -> List[Dict[str, Any]]:
+    """
+    Ingests exclusion/blacklist records from single or multiple sources.
+    sources can be:
+    - A single path or URL string
+    - A comma-separated or semicolon-separated string of paths/URLs (e.g., "file1.xlsx, file2.csv, https://...")
+    - A list of path/URL strings (e.g., from config.json: ["file1.xlsx", "file2.csv"])
+    Merges records and deduplicates by placeId, normalized phone, or exact normalized name.
+    """
+    if not sources:
+        return []
+
+    target_list: List[str] = []
+    if isinstance(sources, str):
+        parts = re.split(r"[,;]+", sources)
+        target_list = [p.strip() for p in parts if p.strip()]
+    elif isinstance(sources, list):
+        for item in sources:
+            if isinstance(item, str) and item.strip():
+                for sub in re.split(r"[,;]+", item.strip()):
+                    if sub.strip():
+                        target_list.append(sub.strip())
+
+    if not target_list:
+        return []
+
+    all_records: List[Dict[str, Any]] = []
+    seen_ids = set()
+    seen_phones = set()
+    seen_names = set()
+
+    for src in target_list:
+        records = load_exclusion_source(src)
+        for r in records:
+            pid = (r.get("placeId") or r.get("id") or "").strip()
+            phone = re.sub(r"\D+", "", str(r.get("phone") or ""))
+            name = (r.get("name") or "").strip().lower()
+
+            # Deduplication key check
+            is_dup = False
+            if pid and pid in seen_ids:
+                is_dup = True
+            elif phone and len(phone) >= 7 and phone in seen_phones:
+                is_dup = True
+            elif name and name in seen_names and not pid and not phone:
+                is_dup = True
+
+            if not is_dup:
+                if pid:
+                    seen_ids.add(pid)
+                if phone and len(phone) >= 7:
+                    seen_phones.add(phone)
+                if name:
+                    seen_names.add(name)
+                all_records.append(r)
+
+    return all_records

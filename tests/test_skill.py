@@ -2,7 +2,7 @@
 """
 Unit and regression tests for Google Maps Place Scout Skill.
 Tests:
-1. Filter logic (contracted & visited exclusion)
+1. Filter logic (exclusion sources & blacklist)
 2. Directional corridor projection & anti-shuttle slice sweep
 3. Full 30-stop slash-concatenated Google Maps URL generation
 4. Simplified weekday opening hours algorithm (English format)
@@ -24,7 +24,7 @@ from directional_router import DirectionalRouter, project_to_corridor, get_beari
 from route_generator import RouteGenerator, build_google_maps_slash_url
 from sheet_exporter import SheetExporter, UNIVERSAL_HEADERS, map_stop_to_columns, diagnose_error
 from config_manager import extract_spreadsheet_id, get_temp_dir, get_user_cache_dir, load_effective_config, resolve_origin_input
-from exclusion_loader import normalize_raw_record, load_exclusion_source
+from exclusion_loader import normalize_raw_record, load_exclusion_source, load_exclusion_sources
 
 class TestOpeningHours(unittest.TestCase):
     def test_all_same_weekday(self):
@@ -112,52 +112,59 @@ class TestPlaceFilter(unittest.TestCase):
         import tempfile
         import json
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.contracted_file = os.path.join(self.temp_dir.name, "contracted.json")
-        self.visited_file = os.path.join(self.temp_dir.name, "visited.json")
-        with open(self.contracted_file, "w", encoding="utf-8") as f:
+        self.source1_file = os.path.join(self.temp_dir.name, "source1.json")
+        self.source2_file = os.path.join(self.temp_dir.name, "source2.json")
+        with open(self.source1_file, "w", encoding="utf-8") as f:
             json.dump([
                 {"placeId": "ChIJ4csnNTPV1IkRanjeCREz1WY", "name": "Kate & Jan Hotdogs", "phone": "9055550101"}
             ], f)
-        with open(self.visited_file, "w", encoding="utf-8") as f:
+        with open(self.source2_file, "w", encoding="utf-8") as f:
             json.dump([
                 {"placeId": "ChIJc7Wn-MockVisited001", "name": "Wohebaobei Postpartum Meals", "phone": "4165559999"}
             ], f)
-        self.filter = PlaceFilter(self.contracted_file, self.visited_file)
+        self.filter = PlaceFilter(exclusion_sources=[self.source1_file, self.source2_file])
 
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_contracted_exclusion(self):
+    def test_single_exclusion_source(self):
         mock_cand = {
             "placeId": "ChIJ4csnNTPV1IkRanjeCREz1WY",
             "name": "Kate & Jan Hotdogs",
             "phone": "9055550101"
         }
-        is_c, _ = self.filter.is_contracted(mock_cand)
-        self.assertTrue(is_c)
+        is_ex, reason = self.filter.is_excluded(mock_cand)
+        self.assertTrue(is_ex)
+        self.assertIn("Place ID", reason)
 
-    def test_visited_exclusion(self):
+    def test_multi_exclusion_sources(self):
         mock_cand = {
             "placeId": "ChIJc7Wn-MockVisited001",
             "name": "Wohebaobei Postpartum Meals"
         }
-        is_v, _ = self.filter.is_visited(mock_cand)
-        self.assertTrue(is_v)
+        is_ex, reason = self.filter.is_excluded(mock_cand)
+        self.assertTrue(is_ex)
+        self.assertIn("Place ID", reason)
+
+    def test_comma_separated_exclusion_sources(self):
+        comma_sources = f"{self.source1_file}, {self.source2_file}"
+        filter_comma = PlaceFilter(exclusion_sources=comma_sources)
+        mock1 = {"placeId": "ChIJ4csnNTPV1IkRanjeCREz1WY", "name": "Kate & Jan Hotdogs"}
+        mock2 = {"placeId": "ChIJc7Wn-MockVisited001", "name": "Wohebaobei Postpartum Meals"}
+        self.assertTrue(filter_comma.is_excluded(mock1)[0])
+        self.assertTrue(filter_comma.is_excluded(mock2)[0])
 
     def test_empty_exclusion_sources_allow_all(self):
-        empty_filter = PlaceFilter(contracted_path=None, visited_path=None)
+        empty_filter = PlaceFilter(exclusion_sources=None)
         mock_cand = {
             "placeId": "ChIJanyRandomPlaceId",
             "name": "Kate & Jan Hotdogs",
             "phone": "9055550101",
             "address": "123 Finch Ave E"
         }
-        is_c, reason_c = empty_filter.is_contracted(mock_cand)
-        is_v, reason_v = empty_filter.is_visited(mock_cand)
-        self.assertFalse(is_c)
-        self.assertEqual(reason_c, "")
-        self.assertFalse(is_v)
-        self.assertEqual(reason_v, "")
+        is_ex, reason_ex = empty_filter.is_excluded(mock_cand)
+        self.assertFalse(is_ex)
+        self.assertEqual(reason_ex, "")
 
 class TestDirectionalRouter(unittest.TestCase):
     def test_corridor_projection_east(self):
@@ -506,6 +513,30 @@ class TestExclusionLoaderAndEntityResolution(unittest.TestCase):
         # Should NOT match because they are different branches in different cities
         self.assertFalse(matched)
 
+    def test_load_exclusion_sources_multi_format(self):
+        import tempfile
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            f1 = os.path.join(td, "f1.json")
+            f2 = os.path.join(td, "f2.json")
+            with open(f1, "w", encoding="utf-8") as fp:
+                json.dump([{"placeId": "ID1", "name": "Place One", "phone": "1112223333"}], fp)
+            with open(f2, "w", encoding="utf-8") as fp:
+                json.dump([
+                    {"placeId": "ID2", "name": "Place Two", "phone": "4445556666"},
+                    {"placeId": "ID1", "name": "Place One Duplicate", "phone": "1112223333"}
+                ], fp)
+
+            # Test comma-separated string
+            records = load_exclusion_sources(f"{f1}, {f2}")
+            self.assertEqual(len(records), 2)
+            pids = {r["placeId"] for r in records}
+            self.assertEqual(pids, {"ID1", "ID2"})
+
+            # Test list of sources
+            records_list = load_exclusion_sources([f1, f2])
+            self.assertEqual(len(records_list), 2)
+
 class TestFailureDiagnosisAndAlert(unittest.TestCase):
     def test_diagnose_api_key_error(self):
         err = Exception("Google Places API error 403: API key not valid or request denied.")
@@ -727,7 +758,7 @@ class TestAdHocPlaceExclusionAndPinning(unittest.TestCase):
         self.assertIn("popeyes", reason1)
         self.assertFalse(is_ex2)
 
-    def test_mandatory_place_pinning_overrides_crm(self):
+    def test_mandatory_place_pinning_overrides_exclusion(self):
         import tempfile
         import json
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -737,7 +768,7 @@ class TestAdHocPlaceExclusionAndPinning(unittest.TestCase):
             tmp_path = f.name
         try:
             r_filter = PlaceFilter(
-                contracted_path=tmp_path,
+                exclusion_sources=tmp_path,
                 mandatory_places=["kate & jan hotdogs"]
             )
             cand = {

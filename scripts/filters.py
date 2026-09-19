@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import List, Dict, Tuple, Set, Optional, Any
+from typing import List, Dict, Tuple, Set, Optional, Any, Union
 
 try:
     from opening_hours import check_place_open_status
@@ -10,16 +10,21 @@ except ImportError:
         return True, "营业中"
 
 try:
-    from exclusion_loader import load_exclusion_source, normalize_raw_record
+    from exclusion_loader import load_exclusion_sources, load_exclusion_source, normalize_raw_record
 except ImportError:
+    def load_exclusion_sources(sources: Optional[Any]) -> List[Dict[str, Any]]:
+        if not sources:
+            return []
+        if isinstance(sources, str) and os.path.exists(sources):
+            try:
+                with open(sources, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return []
+        return []
+
     def load_exclusion_source(source: Optional[str]) -> List[Dict[str, Any]]:
-        if not source or not os.path.exists(source):
-            return []
-        try:
-            with open(source, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
+        return load_exclusion_sources(source)
 
 def normalize_phone(phone: str) -> str:
     if not phone or phone in ("无", "未提供", "未知", "null", "None"):
@@ -220,8 +225,7 @@ def semantic_entity_match(
 class PlaceFilter:
     def __init__(
         self,
-        contracted_path: Optional[str] = None,
-        visited_path: Optional[str] = None,
+        exclusion_sources: Optional[Union[str, List[str]]] = None,
         exclude_regions: Optional[List[str]] = None,
         include_regions: Optional[List[str]] = None,
         exclude_places: Optional[List[str]] = None,
@@ -239,10 +243,8 @@ class PlaceFilter:
         locality: Optional[str] = None,
         **kwargs
     ):
-        self.contracted_path = contracted_path or ""
-        self.visited_path = visited_path or ""
-        self.contracted_data = load_exclusion_source(contracted_path) if contracted_path else []
-        self.visited_data = load_exclusion_source(visited_path) if visited_path else []
+        self.exclusion_sources = exclusion_sources
+        self.exclusion_data = load_exclusion_sources(exclusion_sources) if exclusion_sources else []
         self.exclude_regions = [r.lower().strip() for r in (exclude_regions or []) if r and r.strip()]
         self.include_regions = [r.lower().strip() for r in (include_regions or []) if r and r.strip()]
         
@@ -304,8 +306,10 @@ class PlaceFilter:
                     self.jev_client = default_client
 
         self._build_exclusion_indexes()
-        if not self.contracted_data and not self.visited_data:
+        if not self.exclusion_data:
             print("  [Info] 未配置或未指定排除数据源，跳过排除过滤 (所有候选商家平滑准入)")
+        else:
+            print(f"  [Info] 已加载黑名单与排除场所记录: {len(self.exclusion_data)} 条")
         if self.exclude_regions:
             print(f"  [Config] 已配置地理禁行/避开区域: {', '.join(self.exclude_regions)}")
         if self.include_regions:
@@ -365,95 +369,55 @@ class PlaceFilter:
         return False, ""
 
     def _build_exclusion_indexes(self):
-        self.contracted_place_ids: Set[str] = set()
-        self.contracted_phones: Set[str] = set()
-        self.contracted_names: Set[str] = set()
+        self.exclusion_place_ids: Set[str] = set()
+        self.exclusion_phones: Set[str] = set()
+        self.exclusion_names: Set[str] = set()
 
-        for item in self.contracted_data:
+        for item in self.exclusion_data:
             pid = item.get("placeId") or item.get("place_id") or item.get("id")
             if pid:
-                self.contracted_place_ids.add(pid)
+                self.exclusion_place_ids.add(pid)
             phone = normalize_phone(item.get("phone") or item.get("nationalPhoneNumber", ""))
             if phone and len(phone) >= 7:
-                self.contracted_phones.add(phone)
+                self.exclusion_phones.add(phone)
             name = normalize_text(item.get("name") or "")
             if name:
-                self.contracted_names.add(name)
-
-        self.visited_place_ids: Set[str] = set()
-        self.visited_phones: Set[str] = set()
-        self.visited_names: Set[str] = set()
-
-        for item in self.visited_data:
-            pid = item.get("placeId") or item.get("place_id") or item.get("id")
-            if pid:
-                self.visited_place_ids.add(pid)
-            phone = normalize_phone(item.get("phone") or item.get("nationalPhoneNumber", ""))
-            if phone and len(phone) >= 7:
-                self.visited_phones.add(phone)
-            name = normalize_text(item.get("name") or "")
-            if name:
-                self.visited_names.add(name)
+                self.exclusion_names.add(name)
 
         # Dynamically detect multi-location brands (chains) across exclusion data
-        all_ref_data = self.contracted_data + self.visited_data
-        self.chain_brands: Set[str] = detect_multi_location_brands(all_ref_data, dynamic_stopwords=self.dynamic_stopwords)
+        self.chain_brands: Set[str] = detect_multi_location_brands(self.exclusion_data, dynamic_stopwords=self.dynamic_stopwords)
         if self.exclude_places:
             for ep in self.exclude_places:
                 tokens = extract_brand_tokens(ep, dynamic_stopwords=self.dynamic_stopwords)
                 self.chain_brands.update(tokens)
 
-    def is_contracted(self, place: Dict) -> Tuple[bool, str]:
-        """Returns: (is_contracted, match_reason)"""
+    def is_excluded(self, place: Dict) -> Tuple[bool, str]:
+        """
+        Determines if a candidate place is in the exclusion sources / blacklist.
+        Returns: (is_excluded, match_reason)
+        """
         pid = place.get("placeId") or place.get("id", "")
-        if pid and pid in self.contracted_place_ids:
+        if pid and pid in self.exclusion_place_ids:
             return True, f"[精确匹配] Place ID: {pid}"
 
         phone = normalize_phone(place.get("phone") or place.get("nationalPhoneNumber", ""))
-        if phone and phone in self.contracted_phones:
+        if phone and phone in self.exclusion_phones:
             return True, f"[精确匹配] 电话号码: {phone}"
 
         norm_name = normalize_text(place.get("name") or "")
-        if norm_name and norm_name in self.contracted_names:
+        if norm_name and norm_name in self.exclusion_names:
             return True, f"[精确匹配] 名称完全一致: {norm_name}"
 
         matched, conf, rationale, ref = semantic_entity_match(
             place,
-            self.contracted_data,
+            self.exclusion_data,
             jev_client=self.jev_client,
             dynamic_stopwords=self.dynamic_stopwords,
             known_chains=self.chain_brands
         )
         if matched and conf >= 0.70:
             ref_name = ref.get("name", "") if ref else ""
-            return True, f"[模型语义对齐] 与签约商家 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"
-
-        return False, ""
-
-    def is_visited(self, place: Dict) -> Tuple[bool, str]:
-        """Returns: (is_visited, match_reason)"""
-        pid = place.get("placeId") or place.get("id", "")
-        if pid and pid in self.visited_place_ids:
-            return True, f"[精确匹配] Place ID: {pid}"
-
-        phone = normalize_phone(place.get("phone") or place.get("nationalPhoneNumber", ""))
-        if phone and phone in self.visited_phones:
-            return True, f"[精确匹配] 电话号码: {phone}"
-
-        norm_name = normalize_text(place.get("name") or "")
-        if norm_name and norm_name in self.visited_names:
-            return True, f"[精确匹配] 名称完全一致: {norm_name}"
-
-        matched, conf, rationale, ref = semantic_entity_match(
-            place,
-            self.visited_data,
-            jev_client=self.jev_client,
-            dynamic_stopwords=self.dynamic_stopwords,
-            known_chains=self.chain_brands
-        )
-        if matched and conf >= 0.70:
-            ref_name = ref.get("name", "") if ref else ""
-            return True, f"[模型语义对齐] 与拜访记录 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"
+            return True, f"[模型语义对齐] 与排除名单 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"
 
         return False, ""
 
@@ -465,16 +429,14 @@ class PlaceFilter:
             "excluded_manual": 0,
             "excluded_regions": 0,
             "excluded_closed": 0,
-            "excluded_contracted": 0,
-            "excluded_visited": 0,
+            "excluded_sources": 0,
             "hard_match_count": 0,
             "semantic_match_count": 0,
             "mandatory_details": [],
             "manual_details": [],
             "region_details": [],
             "closed_details": [],
-            "contracted_details": [],
-            "visited_details": [],
+            "exclusion_details": [],
             "accepted_count": 0
         }
 
@@ -537,35 +499,20 @@ class PlaceFilter:
                     })
                     continue
 
-            is_c, c_reason = self.is_contracted(r)
-            if is_c:
-                stats["excluded_contracted"] += 1
-                c_tier = "semantic_model" if "[模型语义对齐]" in c_reason else "hard"
-                if c_tier == "hard":
+            # 5. Exclusion Sources & Blacklist Check
+            is_ex, ex_reason = self.is_excluded(r)
+            if is_ex:
+                stats["excluded_sources"] += 1
+                ex_tier = "semantic_model" if "[模型语义对齐]" in ex_reason else "hard"
+                if ex_tier == "hard":
                     stats["hard_match_count"] += 1
                 else:
                     stats["semantic_match_count"] += 1
 
-                stats["contracted_details"].append({
+                stats["exclusion_details"].append({
                     "name": r.get("name"),
-                    "reason": c_reason,
-                    "tier": c_tier
-                })
-                continue
-
-            is_v, v_reason = self.is_visited(r)
-            if is_v:
-                stats["excluded_visited"] += 1
-                v_tier = "semantic_model" if "[模型语义对齐]" in v_reason else "hard"
-                if v_tier == "hard":
-                    stats["hard_match_count"] += 1
-                else:
-                    stats["semantic_match_count"] += 1
-
-                stats["visited_details"].append({
-                    "name": r.get("name"),
-                    "reason": v_reason,
-                    "tier": v_tier
+                    "reason": ex_reason,
+                    "tier": ex_tier
                 })
                 continue
 
