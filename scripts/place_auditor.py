@@ -31,18 +31,26 @@ except ImportError:
         return d
 
 try:
-    from jev_client import JevDecisionClient, classify_jev_tier, JevMatchResult
+    from jev_client import JevDecisionClient, classify_jev_tier, JevMatchResult, resolve_jev_api_key
 except ImportError:
     JevDecisionClient = None
     classify_jev_tier = None
     JevMatchResult = None
+    resolve_jev_api_key = None
 
-def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0) -> bool:
-    """Downloads a photo from a URL to a local destination file."""
+def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0, api_key: str = "") -> bool:
+    """Downloads a photo from a URL to a local destination file.
+
+    The Google Maps API key is appended here at download time only, so stored
+    photo URLs never contain the key (they are written to temp JSON packets).
+    """
     if not url or not dest_path:
         return False
     if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024:
         return True
+    if api_key and "places.googleapis.com" in url and "key=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}key={api_key}"
     try:
         req = urllib.request.Request(
             url,
@@ -68,6 +76,7 @@ class PlaceAuditManager:
         criteria: str = "",
         template: str = "general",
         keywords: Optional[List[str]] = None,
+        google_api_key: Optional[str] = None,
         **kwargs
     ):
         self.audit_dir = audit_dir or get_temp_dir("audit")
@@ -76,11 +85,21 @@ class PlaceAuditManager:
         self.criteria = criteria or ""
         self.template = template or "general"
         self.keywords = keywords or []
+        # Google Maps API key used ONLY at photo-download time (never persisted in URLs)
+        self.google_api_key = (
+            google_api_key
+            or kwargs.get("google_maps_api_key")
+            or os.environ.get("GOOGLE_MAPS_API_KEY", "")
+        ).strip()
 
         self.pending_file = os.path.join(self.audit_dir, "pending_agent_audit.json")
         self.results_file = os.path.join(self.audit_dir, "agent_audit_results.json")
         self.agent_decisions = {}
         self.ambiguous_candidates = []
+        # Cache of Jev evaluate_place results keyed by (placeId, criteria, template).
+        # export_pending_audit() and audit_place() run over the same candidate list,
+        # so without this cache every place would cost 2x Jev API calls.
+        self._jev_cache: Dict[tuple, Any] = {}
         self._load_agent_decisions()
 
         # Audit breakdown stats for reporting
@@ -95,22 +114,15 @@ class PlaceAuditManager:
 
         # Initialize Jev Decision Client
         self.jev_client = jev_client
-        candidate_key = (
-            typesafe_api_key
-            or kwargs.get("typesafe_key")
-            or kwargs.get("jev_key")
-            or openrouter_api_key
-            or os.environ.get("TYPESAFE_API_KEY")
-            or os.environ.get("JEV_API_KEY")
-            or os.environ.get("OPENROUTER_API_KEY", "")
-        )
-        if self.jev_client is None and JevDecisionClient is not None:
+        if self.jev_client is None and JevDecisionClient is not None and resolve_jev_api_key is not None:
+            candidate_key = resolve_jev_api_key(
+                typesafe_api_key,
+                kwargs.get("typesafe_key"),
+                kwargs.get("jev_key"),
+                openrouter_api_key,
+            )
             if candidate_key:
                 self.jev_client = JevDecisionClient(api_key=candidate_key)
-            else:
-                default_client = JevDecisionClient()
-                if default_client.is_ready():
-                    self.jev_client = default_client
 
     def _load_agent_decisions(self):
         """Loads agent-verified multimodal decisions from agent_audit_results.json."""
@@ -148,6 +160,18 @@ class PlaceAuditManager:
         """Returns True if there are ambiguous/unverified candidates that still need agent review."""
         return len(self.ambiguous_candidates) > 0
 
+    def _cached_evaluate_place(self, place: Dict) -> Optional[Any]:
+        """evaluate_place with per-run memoization (halves Jev API usage)."""
+        if not self.jev_client:
+            return None
+        pid = place.get("placeId") or place.get("id", "")
+        cache_key = (pid, self.criteria, self.template)
+        if cache_key not in self._jev_cache:
+            self._jev_cache[cache_key] = self.jev_client.evaluate_place(
+                place, criteria=self.criteria, template=self.template
+            )
+        return self._jev_cache[cache_key]
+
     def export_pending_audit(
         self,
         candidates: List[Dict],
@@ -181,7 +205,7 @@ class PlaceAuditManager:
             jev_rationale = ""
 
             if self.jev_client and getattr(self.jev_client, "is_ready", lambda: False)():
-                jev_eval = self.jev_client.evaluate_place(c, criteria=self.criteria, template=self.template)
+                jev_eval = self._cached_evaluate_place(c)
                 if jev_eval is not None:
                     _, conf, _, rat = jev_eval[:4]
                     tier_status = getattr(jev_eval, "tier_status", None)
@@ -211,7 +235,7 @@ class PlaceAuditManager:
                     clean_id = re.sub(r"[^a-zA-Z0-9_-]", "_", pid)[-24:]
                     for idx, purl in enumerate(photo_urls[:2]):
                         dest = os.path.join(self.photos_dir, f"{clean_id}_{idx}.jpg")
-                        if download_candidate_photo(purl, dest):
+                        if download_candidate_photo(purl, dest, api_key=self.google_api_key):
                             local_paths.append(dest)
 
                 ambiguous_items.append({
@@ -278,7 +302,7 @@ class PlaceAuditManager:
 
         # 2. TypeSafe Jev Tiered Decision Model
         if self.jev_client and getattr(self.jev_client, "is_ready", lambda: False)():
-            jev_eval = self.jev_client.evaluate_place(place, criteria=self.criteria, template=self.template)
+            jev_eval = self._cached_evaluate_place(place)
             if jev_eval is not None:
                 is_match, conf, features, rationale = jev_eval[:4]
                 tier_status = getattr(jev_eval, "tier_status", None)

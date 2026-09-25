@@ -11,8 +11,10 @@ import time
 import gzip
 import http.client
 import re
+import threading
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple
 from opening_hours import format_weekday_opening_hours
 
@@ -43,6 +45,28 @@ PRICE_MAP = {
     "PRICE_LEVEL_EXPENSIVE": "$$$",
     "PRICE_LEVEL_VERY_EXPENSIVE": "$$$$"
 }
+
+# Default address-keyword -> region label mapping used when the Places API
+# response carries no usable addressComponents. Override at runtime via
+# set_region_aliases() (e.g. from config file "region_aliases") when scouting
+# outside the default metro area.
+DEFAULT_REGION_KEYWORDS = {
+    "markham": "Markham",
+    "scarborough": "Scarborough",
+    "north york": "North York",
+    "richmond hill": "Richmond Hill",
+    "mississauga": "Mississauga",
+    "vaughan": "Vaughan",
+    "downtown": "Downtown",
+}
+
+REGION_KEYWORDS = dict(DEFAULT_REGION_KEYWORDS)
+
+
+def set_region_aliases(aliases: Dict[str, str]) -> None:
+    """Replaces the address-keyword -> region mapping (keys matched case-insensitively)."""
+    global REGION_KEYWORDS
+    REGION_KEYWORDS = {str(k).lower(): str(v) for k, v in (aliases or {}).items()}
 
 def strip_emojis(text: str) -> str:
     if not text:
@@ -96,14 +120,14 @@ def transform_google_place(p: Dict, matched_term: str = "", default_region: str 
     if isinstance(reviews_val, list):
         reviews_text = strip_emojis(" ".join([r.get("text", {}).get("text", "") for r in reviews_val[:3] if isinstance(r, dict)]))
 
-    # Collect photo URLs
+    # Collect photo URLs (API key is intentionally NOT embedded here;
+    # it is appended at download time so keys never land in temp files/reports)
     photos = p.get("photos", []) if isinstance(p.get("photos"), list) else []
     photo_urls = []
-    if api_key:
-        for ph in photos[:3]:
-            ph_name = ph.get("name")
-            if ph_name:
-                photo_urls.append(f"https://places.googleapis.com/v1/{ph_name}/media?key={api_key}&maxHeightPx=600&maxWidthPx=600")
+    for ph in photos[:3]:
+        ph_name = ph.get("name")
+        if ph_name:
+            photo_urls.append(f"https://places.googleapis.com/v1/{ph_name}/media?maxHeightPx=600&maxWidthPx=600")
 
     # Determine region dynamically from addressComponents or address text
     region = default_region
@@ -120,30 +144,21 @@ def transform_google_place(p: Dict, matched_term: str = "", default_region: str 
     addr_lower = address.lower()
     if extracted_locality:
         region = extracted_locality
-    elif "markham" in addr_lower:
-        region = "Markham"
-    elif "scarborough" in addr_lower:
-        region = "Scarborough"
-    elif "north york" in addr_lower:
-        region = "North York"
-    elif "richmond hill" in addr_lower:
-        region = "Richmond Hill"
-    elif "mississauga" in addr_lower:
-        region = "Mississauga"
-    elif "vaughan" in addr_lower:
-        region = "Vaughan"
-    elif "downtown" in addr_lower:
-        region = "Downtown"
     else:
-        # Fallback: extract municipality from comma-separated address parts
-        parts = [pt.strip() for pt in address.split(",") if pt.strip()]
-        if len(parts) >= 3:
-            # e.g., "5000 Hwy 7, Markham, ON" -> "Markham"
-            candidate_part = parts[-3] if len(parts) >= 4 else parts[1]
-            # Strip digits/unit
-            cleaned_part = re.sub(r"^\d+\s*", "", candidate_part).strip()
-            if cleaned_part and len(cleaned_part) < 30:
-                region = cleaned_part
+        for keyword, label in REGION_KEYWORDS.items():
+            if keyword in addr_lower:
+                region = label
+                break
+        else:
+            # Fallback: extract municipality from comma-separated address parts
+            parts = [pt.strip() for pt in address.split(",") if pt.strip()]
+            if len(parts) >= 3:
+                # e.g., "5000 Hwy 7, Markham, ON" -> "Markham"
+                candidate_part = parts[-3] if len(parts) >= 4 else parts[1]
+                # Strip digits/unit
+                cleaned_part = re.sub(r"^\d+\s*", "", candidate_part).strip()
+                if cleaned_part and len(cleaned_part) < 30:
+                    region = cleaned_part
 
     business_status = (p.get("businessStatus") or p.get("business_status") or "OPERATIONAL").strip()
 
@@ -241,6 +256,12 @@ class PlacesSearcher:
                     if str(encoding).lower() == "gzip":
                         raw_data = gzip.decompress(raw_data)
                     return json.loads(raw_data.decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                # Retry transient server errors and rate limiting with exponential backoff
+                if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                    time.sleep(1.5 * (2 ** attempt))
+                    continue
+                raise
             except (http.client.IncompleteRead, urllib.error.URLError, TimeoutError) as err:
                 if attempt == max_retries - 1:
                     raise err
@@ -265,7 +286,7 @@ class PlacesSearcher:
 
         places_map = {}
         print(f"Querying Google Places API (New) across {len(probe_points)} corridor probes in English...")
-        
+
         # Determine search queries from keywords or place_types
         if keywords and any(k.strip() for k in keywords):
             selected_keywords = [k.strip() for k in keywords if k.strip()][:4]
@@ -276,39 +297,59 @@ class PlacesSearcher:
 
         primary_type_filter = place_types[0].strip() if (place_types and len(place_types) == 1) else None
         min_pool_target = max(100, target_count * 4)
+        map_lock = threading.Lock()
+
+        def query_keyword_paginated(kw: str, p_lat: float, p_lng: float) -> List[Dict]:
+            """Runs one keyword query, following nextPageToken (up to 2 extra pages)."""
+            collected: List[Dict] = []
+            page_token = ""
+            pages = 0
+            while True:
+                data = self.search_places_api(
+                    kw,
+                    p_lat,
+                    p_lng,
+                    radius_meters=radius_meters,
+                    page_token=page_token,
+                    included_type=primary_type_filter,
+                    region_code=region_code
+                )
+                collected.extend(data.get("places", []))
+                page_token = data.get("nextPageToken", "")
+                pages += 1
+                if not page_token or pages > 2:
+                    break
+                time.sleep(1.2)  # page tokens need a short warm-up delay
+            return collected
 
         for idx, (p_lat, p_lng) in enumerate(probe_points):
             print(f"  Probe #{idx + 1}/{len(probe_points)} at ({p_lat:.4f}, {p_lng:.4f}) radius {radius_meters}m...")
             probe_new_count = 0
 
-            for kw in selected_keywords:
-                query = kw.strip()
-
-                try:
-                    data = self.search_places_api(
-                        query,
-                        p_lat,
-                        p_lng,
-                        radius_meters=radius_meters,
-                        included_type=primary_type_filter,
-                        region_code=region_code
-                    )
-                    places = data.get("places", [])
+            # Keyword queries within a probe are independent -> run in parallel
+            with ThreadPoolExecutor(max_workers=min(4, len(selected_keywords))) as pool:
+                futures = {
+                    pool.submit(query_keyword_paginated, kw, p_lat, p_lng): kw
+                    for kw in selected_keywords
+                }
+                for fut, kw in futures.items():
+                    try:
+                        places = fut.result()
+                    except Exception as e:
+                        print(f"    [Warning] API Query '{kw}': {e}")
+                        continue
                     for p in places:
                         pid = p.get("id")
                         if not pid:
                             continue
-                        if pid not in places_map:
-                            transformed = transform_google_place(p, matched_term=kw, api_key=self.api_key)
-                            places_map[pid] = transformed
-                            probe_new_count += 1
-                except Exception as e:
-                    print(f"    [Warning] API Query '{query}': {e}")
+                        with map_lock:
+                            if pid not in places_map:
+                                places_map[pid] = transform_google_place(p, matched_term=kw, api_key=self.api_key)
+                                probe_new_count += 1
 
             print(f"  Probe #{idx + 1} found {probe_new_count} new candidates (Total pooled: {len(places_map)})")
             if len(places_map) >= min_pool_target and idx >= 3:
                 print(f"  已在走廊内检索到充沛商户 ({len(places_map)} 家)，探测完毕。")
                 break
-            time.sleep(0.3)
 
         return list(places_map.values())

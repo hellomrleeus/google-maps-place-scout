@@ -17,13 +17,14 @@ import json
 import math
 import argparse
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
 from filters import PlaceFilter
-from places_searcher import PlacesSearcher
+from places_searcher import PlacesSearcher, set_region_aliases
 from directional_router import (
     DirectionalRouter,
     generate_corridor_probe_points,
@@ -87,6 +88,7 @@ def main():
     parser.add_argument("--max-depth", type=float, default=None, help="Maximum along-track search depth in km")
     parser.add_argument("--departure-time", type=str, default=None, help="出发时间 (格式如 09:30，默认读取配置或 09:30)")
     parser.add_argument("--visit-date", type=str, default=None, help="拜访日期 (YYYY-MM-DD，也可输入 'today' / 'tomorrow'，默认自适应)")
+    parser.add_argument("--timezone", type=str, default=None, help="用户本地时区 (如 'America/Toronto'，用于 today/tomorrow 解析)")
     parser.add_argument("--allow-dinner-only", action="store_true", help="允许仅晚间/夜宵时段营业的场所 (默认自动排除白天未营业的场所)")
     parser.add_argument("--keep-closed", action="store_true", help="禁用开业状态校验 (保留公休与停业场所)")
     parser.add_argument("--dump-audit-only", action="store_true", help="Dump pending audit queue for agent inspection and pause")
@@ -128,6 +130,9 @@ def main():
 
     # Load configuration
     cfg = load_effective_config(custom_config_path=args.config)
+    # Optional region keyword overrides for non-default metro areas
+    if cfg.get("region_aliases"):
+        set_region_aliases(cfg["region_aliases"])
     openrouter_api_key = (
         args.openrouter_key
         or args.typesafe_key
@@ -138,8 +143,14 @@ def main():
         or os.environ.get("OPENROUTER_API_KEY", "")
     )
 
-    # Resolve departure date
-    today_dt = datetime.now()
+    # Resolve departure date (anchored to the user's timezone when configured)
+    tz_name = (args.timezone or cfg.get("timezone", "") or "").strip()
+    try:
+        user_tz = ZoneInfo(tz_name) if tz_name else None
+    except Exception:
+        print(f"[Warning] 无效的时区配置 '{tz_name}'，回退到服务器本地时间。")
+        user_tz = None
+    today_dt = datetime.now(user_tz)
     if not args.visit_date:
         target_mode = cfg.get("default_visit_target", "auto").lower().strip()
         if target_mode in ("tomorrow", "next_day"):
@@ -422,7 +433,8 @@ def main():
             openrouter_api_key=openrouter_api_key,
             criteria=criteria,
             template=template,
-            keywords=keywords
+            keywords=keywords,
+            google_api_key=api_key
         )
         pending_audit_file = audit_mgr.export_pending_audit(filtered_candidates)
         ambiguous_items = audit_mgr.ambiguous_candidates

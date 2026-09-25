@@ -108,9 +108,10 @@ def extract_address_features(address: str, dynamic_stopwords: Optional[Set[str]]
     return street_num, keywords
 
 try:
-    from jev_client import JevDecisionClient
+    from jev_client import JevDecisionClient, resolve_jev_api_key
 except ImportError:
     JevDecisionClient = None
+    resolve_jev_api_key = None
 
 def detect_multi_location_brands(records: List[Dict], dynamic_stopwords: Optional[Set[str]] = None) -> Set[str]:
     """
@@ -288,22 +289,15 @@ class PlaceFilter:
 
         # Initialize Jev Decision Client
         self.jev_client = jev_client
-        if self.jev_client is None and JevDecisionClient is not None:
-            candidate_key = (
-                typesafe_api_key
-                or kwargs.get("typesafe_key")
-                or kwargs.get("jev_key")
-                or openrouter_api_key
-                or os.environ.get("TYPESAFE_API_KEY")
-                or os.environ.get("JEV_API_KEY")
-                or os.environ.get("OPENROUTER_API_KEY", "")
+        if self.jev_client is None and JevDecisionClient is not None and resolve_jev_api_key is not None:
+            candidate_key = resolve_jev_api_key(
+                typesafe_api_key,
+                kwargs.get("typesafe_key"),
+                kwargs.get("jev_key"),
+                openrouter_api_key,
             )
             if candidate_key:
                 self.jev_client = JevDecisionClient(api_key=candidate_key)
-            else:
-                default_client = JevDecisionClient()
-                if default_client.is_ready():
-                    self.jev_client = default_client
 
         self._build_exclusion_indexes()
         if not self.exclusion_data:
@@ -415,7 +409,9 @@ class PlaceFilter:
             dynamic_stopwords=self.dynamic_stopwords,
             known_chains=self.chain_brands
         )
-        if matched and conf >= 0.70:
+        # Trust the decision contract of semantic_entity_match / Jev client:
+        # both already apply their own confidence thresholds internally.
+        if matched:
             ref_name = ref.get("name", "") if ref else ""
             return True, f"[模型语义对齐] 与排除名单 '{ref_name}' 匹配 ({rationale}, 置信度: {int(conf*100)}%)"
 

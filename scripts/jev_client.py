@@ -24,6 +24,28 @@ DEFAULT_JEV_MODEL = "jev-latest"
 TYPESAFE_SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone"
 OPENROUTER_DECISIONS_URL = TYPESAFE_SYSTEMONE_URL
 
+JEV_KEY_ENV_VARS = ("TYPESAFE_API_KEY", "JEV_API_KEY", "OPENROUTER_API_KEY")
+
+
+def resolve_jev_api_key(*candidates: Optional[str]) -> str:
+    """
+    Centralized TypeSafe/Jev API key resolution.
+    Returns the first usable key from explicit candidates (args/kwargs/config),
+    falling back to environment variables. A key counts as usable only if it
+    looks real (not a "YOUR_..." placeholder and longer than 8 chars),
+    mirroring JevDecisionClient.is_ready().
+    """
+    for c in candidates:
+        if c:
+            v = str(c).strip()
+            if v and not v.startswith("YOUR_") and len(v) > 8:
+                return v
+    for env_name in JEV_KEY_ENV_VARS:
+        v = os.environ.get(env_name, "").strip()
+        if v and not v.startswith("YOUR_") and len(v) > 8:
+            return v
+    return ""
+
 class JevMatchResult(tuple):
     """
     Generalized typed decision result.
@@ -272,13 +294,7 @@ class JevDecisionClient:
         site_name: str = "Google Maps Place Scout",
         timeout: float = 10.0
     ):
-        self.api_key = (
-            api_key
-            or os.environ.get("TYPESAFE_API_KEY")
-            or os.environ.get("JEV_API_KEY")
-            or os.environ.get("OPENROUTER_API_KEY")
-            or ""
-        ).strip()
+        self.api_key = resolve_jev_api_key(api_key)
         self.model = model or DEFAULT_JEV_MODEL
         self.api_url = (
             os.environ.get("TYPESAFE_API_URL")

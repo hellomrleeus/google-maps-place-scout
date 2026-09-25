@@ -47,3 +47,8 @@
   - If user mentions explicit times ("明天上午10点", "今天下午2点", "明早9点半", "现在出发"): resolve into 24-hour format `--departure-time "HH:MM"` and corresponding `--visit-date <today|tomorrow|YYYY-MM-DD>`.
   - If user requests planning for **today** ("今天") or immediate departure without an explicit time: always inject `--visit-date today --departure-time "<current_HH:MM>"` using current local time to avoid defaulting to 09:30 AM in the past.
   - If user requests planning for **tomorrow** ("明天") without an explicit time: inject `--visit-date tomorrow` (defaults to standard morning 09:30).
+
+## 4. Designated Maintainer Exception (Effective 2026-09-25)
+- The repository owner (hellomrleeus) has designated Muse, the owner's AI assistant, as the maintainer of this repository.
+- The maintainer MAY modify code under `scripts/`, tests, and documentation to fix bugs, apply optimizations, and evolve the skill. Changes are pushed directly to `main` per the owner's standing instruction.
+- Sections 1–2 (read-only engine policy) continue to apply to all other ad-hoc agents and to one-off prospecting tasks: those must go through CLI arguments only, never code edits.

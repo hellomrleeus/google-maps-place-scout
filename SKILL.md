@@ -348,6 +348,11 @@ python3 <SKILL_DIR>/scripts/main.py --include-regions "markham" --max-depth 15.0
 ```
 
 ### Execution Timing & Target Dates (On-Demand & Scheduled)
+
+> **Note on scheduling**: the skill itself is single-run; recurring execution is
+> owned by the host agent platform (e.g. a cron job that invokes `main.py`).
+> The `schedule` block in `config.example.json` is a convention for the host
+> scheduler, not a flag consumed by the CLI.
 ```bash
 # 1. Plan for Today's Route (e.g. executed in the morning or mid-day before departure)
 python3 <SKILL_DIR>/scripts/main.py --visit-date today --departure-time 10:00

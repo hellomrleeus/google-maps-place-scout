@@ -45,6 +45,12 @@
   },
   "default_visit_target": "auto",
   "default_departure_time": "09:30",
+  "timezone": "America/Toronto",
+  "region_aliases": {
+    "markham": "Markham",
+    "scarborough": "Scarborough",
+    "north york": "North York"
+  },
   "paths": {
     "exclusion_sources": [],
     "output_dir": "output"

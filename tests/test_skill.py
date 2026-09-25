@@ -1709,6 +1709,169 @@ class TestAgentNativeZeroJevHandshake(unittest.TestCase):
             self.assertEqual(conf, 1.0)
             self.assertIn("single-origin", feats)
 
+class TestMaintainerOptimizations(unittest.TestCase):
+    """Regression tests for maintainer fixes: key hygiene, Jev caching,
+    pagination, retry, region aliases, and unified exclusion thresholds."""
+
+    def test_resolve_jev_api_key_prefers_first_valid(self):
+        from jev_client import resolve_jev_api_key
+        self.assertEqual(
+            resolve_jev_api_key("YOUR_PLACEHOLDER", "typesafe-real-key-12345678"),
+            "typesafe-real-key-12345678",
+        )
+        self.assertEqual(resolve_jev_api_key("", None, "short"), "")
+
+    def test_resolve_jev_api_key_env_fallback(self):
+        import os
+        from jev_client import resolve_jev_api_key
+        old = os.environ.get("TYPESAFE_API_KEY")
+        os.environ["TYPESAFE_API_KEY"] = "typesafe-env-key-12345678"
+        try:
+            self.assertEqual(resolve_jev_api_key(None), "typesafe-env-key-12345678")
+        finally:
+            if old is None:
+                del os.environ["TYPESAFE_API_KEY"]
+            else:
+                os.environ["TYPESAFE_API_KEY"] = old
+
+    def test_photo_urls_never_contain_api_key(self):
+        from places_searcher import transform_google_place
+        raw = {
+            "id": "ChIJ-test-1",
+            "displayName": {"text": "Test Cafe"},
+            "formattedAddress": "100 King St, Toronto, ON",
+            "location": {"latitude": 43.6, "longitude": -79.4},
+            "photos": [{"name": "places/ChIJ-test-1/photos/abc123"}],
+        }
+        out = transform_google_place(raw, api_key="AIzaSuperSecretKey123")
+        self.assertTrue(out["photo_urls"])
+        for u in out["photo_urls"]:
+            self.assertNotIn("AIzaSuperSecretKey123", u)
+            self.assertNotIn("key=", u)
+
+    def test_download_appends_key_at_download_time(self):
+        import json
+        from unittest.mock import patch, MagicMock
+        from place_auditor import download_candidate_photo
+        import tempfile
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"x" * 2000
+        mock_resp.__enter__.return_value = mock_resp
+
+        with tempfile.TemporaryDirectory() as td:
+            dest = os.path.join(td, "p.jpg")
+            with patch("urllib.request.urlopen", return_value=mock_resp) as m:
+                ok = download_candidate_photo(
+                    "https://places.googleapis.com/v1/places/X/photos/Y/media?maxHeightPx=600",
+                    dest,
+                    api_key="AIzaDownloadKey",
+                )
+            self.assertTrue(ok)
+            req = m.call_args[0][0]
+            self.assertIn("key=AIzaDownloadKey", req.full_url)
+
+    def test_jev_evaluate_place_cached(self):
+        from unittest.mock import MagicMock
+        from place_auditor import PlaceAuditManager
+        import tempfile
+
+        fake_client = MagicMock()
+        fake_client.is_ready.return_value = True
+        fake_client.evaluate_place.return_value = (True, 0.9, ["f"], "r")
+
+        with tempfile.TemporaryDirectory() as td:
+            mgr = PlaceAuditManager(audit_dir=td, jev_client=fake_client)
+            place = {"placeId": "ChIJ-cached-1", "name": "Cached Cafe"}
+            mgr._cached_evaluate_place(place)
+            mgr._cached_evaluate_place(place)
+            self.assertEqual(fake_client.evaluate_place.call_count, 1)
+
+    def test_search_follows_next_page_token(self):
+        from unittest.mock import patch
+        from places_searcher import PlacesSearcher
+
+        page1 = {"places": [{"id": "p1", "displayName": {"text": "A"},
+                             "formattedAddress": "1 Main St, Markham, ON",
+                             "location": {"latitude": 43.8, "longitude": -79.2}}],
+                 "nextPageToken": "tok123"}
+        page2 = {"places": [{"id": "p2", "displayName": {"text": "B"},
+                             "formattedAddress": "2 Main St, Markham, ON",
+                             "location": {"latitude": 43.81, "longitude": -79.21}}]}
+
+        searcher = PlacesSearcher(api_key="AIzaFakeKey")
+        calls = []
+
+        def fake_search(text_query, lat, lng, radius_meters=5000, page_token="", **kw):
+            calls.append(page_token)
+            return page1 if not page_token else page2
+
+        with patch.object(PlacesSearcher, "search_places_api", side_effect=fake_search):
+            with patch("places_searcher.time.sleep", return_value=None):
+                results = searcher.search_corridor_probes(
+                    [(43.8, -79.2)], keywords=["cafe"], radius_meters=1000, target_count=2
+                )
+        ids = {r["placeId"] for r in results}
+        self.assertEqual(ids, {"p1", "p2"})
+        self.assertIn("tok123", calls)
+
+    def test_search_retries_on_429(self):
+        import io
+        import urllib.error
+        from unittest.mock import patch, MagicMock
+        from places_searcher import PlacesSearcher
+
+        err = urllib.error.HTTPError(
+            "https://places.googleapis.com/v1/places:searchText",
+            429, "Too Many Requests", {}, io.BytesIO(b""))
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"places": []}'
+        mock_resp.headers = {}
+        mock_resp.__enter__.return_value = mock_resp
+
+        searcher = PlacesSearcher(api_key="AIzaFakeKey")
+        with patch("urllib.request.urlopen", side_effect=[err, mock_resp]) as m:
+            with patch("places_searcher.time.sleep", return_value=None):
+                data = searcher.search_places_api("cafe", 43.8, -79.2)
+        self.assertEqual(data, {"places": []})
+        self.assertEqual(m.call_count, 2)
+
+    def test_region_aliases_override(self):
+        from places_searcher import transform_google_place, set_region_aliases, DEFAULT_REGION_KEYWORDS
+        try:
+            set_region_aliases({"yonge": "Uptown Yonge"})
+            raw = {
+                "id": "ChIJ-r1",
+                "displayName": {"text": "Shop"},
+                "formattedAddress": "500 Yonge St",
+                "location": {"latitude": 43.6, "longitude": -79.4},
+            }
+            out = transform_google_place(raw)
+            self.assertEqual(out["region"], "Uptown Yonge")
+        finally:
+            set_region_aliases(DEFAULT_REGION_KEYWORDS)
+
+    def test_unified_exclusion_threshold_trusts_jev(self):
+        from unittest.mock import MagicMock
+        from filters import PlaceFilter
+
+        fake_jev = MagicMock()
+        fake_jev.is_ready.return_value = True
+        # Jev says same store with conf 0.55 (below the old 0.70 gate)
+        fake_jev.evaluate_entity_match.return_value = (True, 0.55, "same store", "same_store")
+
+        pf = PlaceFilter(
+            exclusion_sources=None,
+            jev_client=fake_jev,
+        )
+        pf.exclusion_data = [{"name": "Pilot Coffee Roasters", "address": "100 King St"}]
+        pf._build_exclusion_indexes()
+
+        candidate = {"name": "Pilot Coffee Roasters", "address": "100 King St W",
+                     "phone": "None", "placeId": "ChIJ-other", "primaryType": "cafe"}
+        is_ex, reason = pf.is_excluded(candidate)
+        self.assertTrue(is_ex)
+
 if __name__ == "__main__":
     unittest.main()
 
