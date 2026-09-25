@@ -1872,6 +1872,148 @@ class TestMaintainerOptimizations(unittest.TestCase):
         is_ex, reason = pf.is_excluded(candidate)
         self.assertTrue(is_ex)
 
+class TestLocalApiCache(unittest.TestCase):
+    """Tests for the persistent local cache (search + photos) and
+    configurable pagination depth."""
+
+    def _mk_cache(self, **kw):
+        import tempfile
+        from cache_manager import PlaceCache
+        td = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, td, True)
+        args = {"cache_dir": td, "ttl_days": 7, "photo_ttl_days": 30}
+        args.update(kw)
+        return PlaceCache(**args)
+
+    def test_search_key_rounds_coordinates(self):
+        from cache_manager import PlaceCache
+        k1 = PlaceCache.search_key("cafe", 43.80001, -79.20002, 1000, None, "en", None, 5)
+        k2 = PlaceCache.search_key("Cafe ", 43.80002, -79.20001, 1000, None, "en", None, 5)
+        self.assertEqual(k1, k2)
+        k3 = PlaceCache.search_key("cafe", 43.80001, -79.20002, 1000, None, "en", None, 3)
+        self.assertNotEqual(k1, k3)
+
+    def test_search_put_get_and_ttl_expiry(self):
+        cache = self._mk_cache()
+        key = "search:test-key"
+        cache.put_search(key, [{"id": "p1"}])
+        self.assertEqual(cache.get_search(key), [{"id": "p1"}])
+
+        expired = self._mk_cache(ttl_days=0)
+        expired.put_search(key, [{"id": "p9"}])
+        self.assertIsNone(expired.get_search(key))
+
+    def test_photo_name_extraction(self):
+        from cache_manager import PlaceCache
+        self.assertEqual(
+            PlaceCache.photo_name_from_url(
+                "https://places.googleapis.com/v1/places/AAA/photos/BBB/media?maxHeightPx=600"),
+            "places/AAA/photos/BBB")
+        self.assertEqual(PlaceCache.photo_name_from_url("https://example.com/x.jpg"), "")
+
+    def test_photo_cache_hit_avoids_download(self):
+        import os
+        from unittest.mock import patch
+        from place_auditor import download_candidate_photo
+        import tempfile
+
+        cache = self._mk_cache()
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"y" * 2000)
+            src = f.name
+        try:
+            cache.put_photo("places/AAA/photos/BBB", src)
+            with tempfile.TemporaryDirectory() as td:
+                dest = os.path.join(td, "p.jpg")
+                with patch("urllib.request.urlopen",
+                           side_effect=AssertionError("should not download")):
+                    ok = download_candidate_photo(
+                        "https://places.googleapis.com/v1/places/AAA/photos/BBB/media?maxHeightPx=600",
+                        dest, photo_cache=cache)
+                self.assertTrue(ok)
+                self.assertTrue(os.path.exists(dest))
+        finally:
+            os.remove(src)
+
+    def test_pagination_respects_max_pages(self):
+        from unittest.mock import patch
+        from places_searcher import PlacesSearcher
+
+        searcher = PlacesSearcher(api_key="AIzaFakeKey", max_pages=4)
+        calls = []
+
+        def fake_search(text_query, lat, lng, radius_meters=5000, page_token="", **kw):
+            calls.append(1)
+            n = len(calls)
+            return {"places": [{"id": f"p{n}-{i}",
+                                "displayName": {"text": f"P{n}-{i}"},
+                                "formattedAddress": "1 Main St, Markham, ON",
+                                "location": {"latitude": 43.8, "longitude": -79.2}}
+                               for i in range(3)],
+                    "nextPageToken": f"tok{n}"}
+
+        with patch.object(PlacesSearcher, "search_places_api", side_effect=fake_search):
+            with patch("places_searcher.time.sleep", return_value=None):
+                results = searcher.search_corridor_probes(
+                    [(43.8, -79.2)], keywords=["cafe"], radius_meters=1000, target_count=2)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(results), 12)
+
+    def test_early_stop_on_duplicate_saturation(self):
+        from unittest.mock import patch
+        from places_searcher import PlacesSearcher, PlaceCache
+
+        cache = self._mk_cache()
+        searcher = PlacesSearcher(api_key="AIzaFakeKey", max_pages=5, cache=cache)
+        calls = []
+
+        def mk(pid):
+            return {"id": pid, "displayName": {"text": pid},
+                    "formattedAddress": "1 Main St, Markham, ON",
+                    "location": {"latitude": 43.8, "longitude": -79.2}}
+
+        pages = [
+            {"places": [mk("p1"), mk("p2")], "nextPageToken": "t1"},
+            {"places": [mk("p1"), mk("p2")], "nextPageToken": "t2"},  # all dup -> stop
+            {"places": [mk("p3")], "nextPageToken": ""},
+        ]
+
+        def fake_search(text_query, lat, lng, radius_meters=5000, page_token="", **kw):
+            calls.append(1)
+            return pages[len(calls) - 1]
+
+        with patch.object(PlacesSearcher, "search_places_api", side_effect=fake_search):
+            with patch("places_searcher.time.sleep", return_value=None):
+                results = searcher.search_corridor_probes(
+                    [(43.8, -79.2)], keywords=["cafe"], radius_meters=1000, target_count=2)
+        self.assertEqual(len(calls), 2)  # page 3 never fetched
+        self.assertEqual({r["placeId"] for r in results}, {"p1", "p2"})
+        # Early-stopped runs must not poison the cache
+        key = PlaceCache.search_key("cafe", 43.8, -79.2, 1000, None, "en", None, 5)
+        self.assertIsNone(cache.get_search(key))
+
+    def test_cache_hit_skips_api(self):
+        from unittest.mock import patch
+        from places_searcher import PlacesSearcher, PlaceCache
+
+        cache = self._mk_cache()
+        searcher = PlacesSearcher(api_key="AIzaFakeKey", max_pages=3, cache=cache)
+        raw = [{"id": "cached-1", "displayName": {"text": "Cached Cafe"},
+                "formattedAddress": "9 Queen St, Toronto, ON",
+                "location": {"latitude": 43.65, "longitude": -79.38}}]
+        key = PlaceCache.search_key("cafe", 43.8, -79.2, 1000, None, "en", None, 3)
+        cache.put_search(key, raw)
+
+        def boom(*a, **kw):
+            raise AssertionError("API should not be called on cache hit")
+
+        with patch.object(PlacesSearcher, "search_places_api", side_effect=boom):
+            results = searcher.search_corridor_probes(
+                [(43.8, -79.2)], keywords=["cafe"], radius_meters=1000, target_count=2)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["placeId"], "cached-1")
+        self.assertEqual(results[0]["name"], "Cached Cafe")
+
 if __name__ == "__main__":
     unittest.main()
 

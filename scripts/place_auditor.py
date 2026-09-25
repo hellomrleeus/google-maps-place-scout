@@ -18,9 +18,15 @@ Architecture (Cascaded Active Multimodal Evaluation):
 import os
 import re
 import json
+import shutil
 import urllib.request
 import tempfile
 from typing import Dict, List, Tuple, Optional, Any
+
+try:
+    from cache_manager import PlaceCache
+except ImportError:
+    PlaceCache = None
 
 try:
     from config_manager import get_temp_dir
@@ -38,16 +44,28 @@ except ImportError:
     JevMatchResult = None
     resolve_jev_api_key = None
 
-def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0, api_key: str = "") -> bool:
+def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0, api_key: str = "",
+                             photo_cache: Optional["PlaceCache"] = None) -> bool:
     """Downloads a photo from a URL to a local destination file.
 
     The Google Maps API key is appended here at download time only, so stored
     photo URLs never contain the key (they are written to temp JSON packets).
+    When a PlaceCache is supplied, previously downloaded photos are reused
+    from the persistent cache instead of issuing another billed media request.
     """
     if not url or not dest_path:
         return False
     if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024:
         return True
+    photo_name = PlaceCache.photo_name_from_url(url) if PlaceCache else ""
+    if photo_cache is not None and photo_name:
+        cached = photo_cache.get_photo_path(photo_name)
+        if cached:
+            try:
+                shutil.copyfile(cached, dest_path)
+                return True
+            except OSError:
+                pass
     if api_key and "places.googleapis.com" in url and "key=" not in url:
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}key={api_key}"
@@ -61,6 +79,8 @@ def download_candidate_photo(url: str, dest_path: str, timeout: float = 6.0, api
             if len(data) > 500:
                 with open(dest_path, "wb") as f:
                     f.write(data)
+                if photo_cache is not None and photo_name:
+                    photo_cache.put_photo(photo_name, dest_path)
                 return True
     except Exception:
         pass
@@ -77,6 +97,7 @@ class PlaceAuditManager:
         template: str = "general",
         keywords: Optional[List[str]] = None,
         google_api_key: Optional[str] = None,
+        place_cache: Optional["PlaceCache"] = None,
         **kwargs
     ):
         self.audit_dir = audit_dir or get_temp_dir("audit")
@@ -91,6 +112,8 @@ class PlaceAuditManager:
             or kwargs.get("google_maps_api_key")
             or os.environ.get("GOOGLE_MAPS_API_KEY", "")
         ).strip()
+        # Persistent cache for downloaded photos (saves billed media requests across runs)
+        self.place_cache = place_cache
 
         self.pending_file = os.path.join(self.audit_dir, "pending_agent_audit.json")
         self.results_file = os.path.join(self.audit_dir, "agent_audit_results.json")
@@ -235,7 +258,8 @@ class PlaceAuditManager:
                     clean_id = re.sub(r"[^a-zA-Z0-9_-]", "_", pid)[-24:]
                     for idx, purl in enumerate(photo_urls[:2]):
                         dest = os.path.join(self.photos_dir, f"{clean_id}_{idx}.jpg")
-                        if download_candidate_photo(purl, dest, api_key=self.google_api_key):
+                        if download_candidate_photo(purl, dest, api_key=self.google_api_key,
+                                                     photo_cache=self.place_cache):
                             local_paths.append(dest)
 
                 ambiguous_items.append({

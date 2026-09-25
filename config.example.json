@@ -46,6 +46,13 @@
   "default_visit_target": "auto",
   "default_departure_time": "09:30",
   "timezone": "America/Toronto",
+  "max_pages_per_query": 5,
+  "cache": {
+    "enabled": true,
+    "ttl_days": 7,
+    "photo_ttl_days": 30,
+    "dir": "~/.cache/place-scout"
+  },
   "region_aliases": {
     "markham": "Markham",
     "scarborough": "Scarborough",

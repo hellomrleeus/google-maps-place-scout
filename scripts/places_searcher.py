@@ -17,6 +17,10 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple
 from opening_hours import format_weekday_opening_hours
+try:
+    from cache_manager import PlaceCache
+except ImportError:
+    PlaceCache = None
 
 FIELD_MASK = (
     "places.id,"
@@ -188,9 +192,16 @@ def transform_google_place(p: Dict, matched_term: str = "", default_region: str 
 class PlacesSearcher:
     transform_google_place = staticmethod(transform_google_place)
 
-    def __init__(self, api_key: Optional[str] = None, referer: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, referer: Optional[str] = None,
+                 cache: Optional["PlaceCache"] = None, max_pages: int = 3,
+                 language: str = "en"):
         self.api_key = api_key or os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
         self.referer = (referer or os.environ.get("GOOGLE_MAPS_API_REFERER", "")).strip()
+        self.cache = cache
+        self.language = (language or "en").strip() or "en"
+        # Max Text Search pages (20 results each) fetched per keyword query.
+        # Higher values cover dense districts better; every page is a billed request.
+        self.max_pages = max(1, int(max_pages or 3))
 
     def is_live_api_ready(self) -> bool:
         return bool(self.api_key and not self.api_key.startswith("YOUR_"))
@@ -212,7 +223,7 @@ class PlacesSearcher:
         payload = {
             "textQuery": text_query,
             "maxResultCount": 20,
-            "languageCode": "en",
+            "languageCode": self.language,
             "locationBias": {
                 "circle": {
                     "center": {
@@ -299,12 +310,46 @@ class PlacesSearcher:
         min_pool_target = max(100, target_count * 4)
         map_lock = threading.Lock()
 
-        def query_keyword_paginated(kw: str, p_lat: float, p_lng: float) -> List[Dict]:
-            """Runs one keyword query, following nextPageToken (up to 2 extra pages)."""
-            collected: List[Dict] = []
+        def query_keyword_paginated(kw: str, p_lat: float, p_lng: float) -> int:
+            """Runs one keyword query with pagination, backed by the local cache.
+
+            Fetches up to self.max_pages pages (20 results each), transforming
+            and deduplicating into places_map as pages arrive. Stops early when
+            a page contributes zero new place IDs (dedupe saturation) so billed
+            requests aren't burned on duplicate pages. Results are cached only
+            when pagination ran to its natural end -- a truncated run never
+            poisons the cache for later runs. Returns new-candidate count.
+            """
+            def _ingest(raw_places: List[Dict]) -> int:
+                added = 0
+                for p in raw_places:
+                    pid = p.get("id")
+                    if not pid:
+                        continue
+                    with map_lock:
+                        if pid not in places_map:
+                            places_map[pid] = transform_google_place(
+                                p, matched_term=kw, api_key=self.api_key)
+                            added += 1
+                return added
+
+            cache_key = ""
+            if self.cache is not None and PlaceCache is not None:
+                cache_key = PlaceCache.search_key(
+                    kw, p_lat, p_lng, radius_meters, primary_type_filter,
+                    self.language, region_code, self.max_pages,
+                )
+                hit = self.cache.get_search(cache_key)
+                if hit is not None:
+                    n = _ingest(hit)
+                    print(f"    [Cache] '{kw}' @ ({p_lat:.4f}, {p_lng:.4f}) -> {len(hit)} places, {n} new (0 API calls)")
+                    return n
+
+            new_total = 0
+            raw_for_cache: List[Dict] = []
             page_token = ""
-            pages = 0
-            while True:
+            early_stopped = False
+            for page_no in range(1, self.max_pages + 1):
                 data = self.search_places_api(
                     kw,
                     p_lat,
@@ -314,19 +359,29 @@ class PlacesSearcher:
                     included_type=primary_type_filter,
                     region_code=region_code
                 )
-                collected.extend(data.get("places", []))
+                places = data.get("places", [])
+                page_new = _ingest(places)
+                new_total += page_new
+                if cache_key:
+                    raw_for_cache.extend(places)
                 page_token = data.get("nextPageToken", "")
-                pages += 1
-                if not page_token or pages > 2:
+                if not page_token:
+                    break
+                if page_no > 1 and page_new == 0:
+                    early_stopped = True
                     break
                 time.sleep(1.2)  # page tokens need a short warm-up delay
-            return collected
+            if cache_key and not early_stopped:
+                self.cache.put_search(cache_key, raw_for_cache)
+            return new_total
 
         for idx, (p_lat, p_lng) in enumerate(probe_points):
             print(f"  Probe #{idx + 1}/{len(probe_points)} at ({p_lat:.4f}, {p_lng:.4f}) radius {radius_meters}m...")
             probe_new_count = 0
 
-            # Keyword queries within a probe are independent -> run in parallel
+            # Keyword queries within a probe are independent -> run in parallel.
+            # Each worker ingests its pages straight into places_map (under lock),
+            # so dedupe saturation is visible across keywords mid-probe.
             with ThreadPoolExecutor(max_workers=min(4, len(selected_keywords))) as pool:
                 futures = {
                     pool.submit(query_keyword_paginated, kw, p_lat, p_lng): kw
@@ -334,18 +389,9 @@ class PlacesSearcher:
                 }
                 for fut, kw in futures.items():
                     try:
-                        places = fut.result()
+                        probe_new_count += fut.result()
                     except Exception as e:
                         print(f"    [Warning] API Query '{kw}': {e}")
-                        continue
-                    for p in places:
-                        pid = p.get("id")
-                        if not pid:
-                            continue
-                        with map_lock:
-                            if pid not in places_map:
-                                places_map[pid] = transform_google_place(p, matched_term=kw, api_key=self.api_key)
-                                probe_new_count += 1
 
             print(f"  Probe #{idx + 1} found {probe_new_count} new candidates (Total pooled: {len(places_map)})")
             if len(places_map) >= min_pool_target and idx >= 3:

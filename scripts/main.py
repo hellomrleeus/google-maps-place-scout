@@ -89,6 +89,9 @@ def main():
     parser.add_argument("--departure-time", type=str, default=None, help="出发时间 (格式如 09:30，默认读取配置或 09:30)")
     parser.add_argument("--visit-date", type=str, default=None, help="拜访日期 (YYYY-MM-DD，也可输入 'today' / 'tomorrow'，默认自适应)")
     parser.add_argument("--timezone", type=str, default=None, help="用户本地时区 (如 'America/Toronto'，用于 today/tomorrow 解析)")
+    parser.add_argument("--max-pages", type=int, default=None, help="每个关键词查询最多翻页数 (每页 20 条，默认 5；每页都是一次计费请求)")
+    parser.add_argument("--no-cache", action="store_true", help="禁用本地 API 缓存，强制全部走实时请求")
+    parser.add_argument("--cache-dir", type=str, default=None, help="本地缓存目录 (默认 ~/.cache/place-scout)")
     parser.add_argument("--allow-dinner-only", action="store_true", help="允许仅晚间/夜宵时段营业的场所 (默认自动排除白天未营业的场所)")
     parser.add_argument("--keep-closed", action="store_true", help="禁用开业状态校验 (保留公休与停业场所)")
     parser.add_argument("--dump-audit-only", action="store_true", help="Dump pending audit queue for agent inspection and pause")
@@ -297,6 +300,25 @@ def main():
         api_key = cfg.get("google_maps_api_key", "").strip()
         referer = cfg.get("google_maps_api_referer", "").strip()
 
+        # Local API cache: repeat runs over the same areas reuse Text Search
+        # responses and photos instead of issuing billed requests again.
+        place_cache = None
+        cache_cfg = cfg.get("cache", {}) if isinstance(cfg.get("cache"), dict) else {}
+        if not args.no_cache and cache_cfg.get("enabled", True):
+            try:
+                from cache_manager import PlaceCache
+                place_cache = PlaceCache(
+                    cache_dir=args.cache_dir or cache_cfg.get("dir"),
+                    ttl_days=cache_cfg.get("ttl_days", 7),
+                    photo_ttl_days=cache_cfg.get("photo_ttl_days", 30),
+                )
+                purged = place_cache.purge_expired()
+                if purged:
+                    print(f"  [Cache] 清理了 {purged} 条过期缓存")
+            except Exception as e:
+                print(f"  [Cache] 缓存初始化失败 ({e})，本次不使用缓存")
+                place_cache = None
+
         # Decouple departure origin from search target center
         search_name = origin_name
         search_lat = origin_lat
@@ -321,7 +343,13 @@ def main():
             probes = generate_corridor_probe_points(origin_lat, origin_lng, bearing, step_km=step_km, max_depth_km=max_depth_km)
             print(f"  沿航向角 {bearing}° 部署了 {len(probes)} 个探测中心点 (间距 {step_km} km)")
 
-        searcher = PlacesSearcher(api_key=api_key, referer=referer)
+        searcher = PlacesSearcher(
+            api_key=api_key,
+            referer=referer,
+            cache=place_cache,
+            max_pages=(args.max_pages or cfg.get("max_pages_per_query") or 5),
+            language=cfg.get("language_code", "en"),
+        )
         if args.keywords:
             keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
         else:
@@ -434,7 +462,8 @@ def main():
             criteria=criteria,
             template=template,
             keywords=keywords,
-            google_api_key=api_key
+            google_api_key=api_key,
+            place_cache=place_cache
         )
         pending_audit_file = audit_mgr.export_pending_audit(filtered_candidates)
         ambiguous_items = audit_mgr.ambiguous_candidates
